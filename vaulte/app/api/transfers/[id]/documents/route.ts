@@ -5,6 +5,7 @@ import { apiError, apiSuccess } from "@/lib/utils";
 import { checklistFor } from "@/lib/documents/types";
 import { presentDocument } from "@/lib/documents/service";
 import { orgContext } from "@/lib/documents/api";
+import { REQUESTABLE } from "@/lib/documents/requests";
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const c = await orgContext(req);
@@ -13,5 +14,6 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   if (!t) return apiError("NOT_FOUND", "Transfer not found", 404);
   const docs = await db.document.findMany({ where: { transferId: t.id, organizationId: c.orgId }, orderBy: { createdAt: "asc" } });
   const checklist = checklistFor(t, docs);
-  return apiSuccess({ data: docs.map(presentDocument), checklist, complete: checklist.filter(i => i.required).every(i => i.status !== "PENDING"), retention_note: "Keep these records for at least the period your regulator and tax law require (commonly 5-8 years); confirm with your advisers." });
+  const requestable = t.status === "COMPLETED" ? REQUESTABLE.filter(r => (t.destCountry === "IN" || r === "BANK_CERT") && !docs.some(d => d.type === r && d.status !== "REJECTED")) : [];
+  return apiSuccess({ data: docs.map(presentDocument), checklist, requestable, complete: checklist.filter(i => i.required).every(i => i.status !== "PENDING"), retention_note: "Keep these records for at least the period your regulator and tax law require (commonly 5-8 years); confirm with your advisers." });
 }

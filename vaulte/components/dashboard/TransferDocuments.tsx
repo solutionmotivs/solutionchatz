@@ -10,12 +10,20 @@ export default function TransferDocuments({ id, canEdit }: { id: string; canEdit
   const [data, setData] = useState<any>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [reqs, setReqs] = useState<any[]>([]);
   const [f, setF] = useState({ type: "EFIRA", number: "", issuer: "", issued_on: "" });
   const load = useCallback(async () => {
     const r = await api(`/api/transfers/${id}/documents`);
     if (r.ok) setData(r.data); else setErr(r.error?.message ?? "Could not load");
   }, [id]);
-  useEffect(() => { load(); }, [load]);
+  const loadReqs = useCallback(async () => { const r = await api(`/api/transfers/${id}/document-requests`); if (r.ok) setReqs(r.data.data); }, [id]);
+  useEffect(() => { load(); loadReqs(); }, [load, loadReqs]);
+  async function request(type: string) {
+    setErr("");
+    const r = await api(`/api/transfers/${id}/document-requests`, { body: { type } });
+    if (!r.ok) return setErr(r.error?.message ?? "Could not request");
+    loadReqs();
+  }
 
   async function upload(file: File | undefined) {
     setErr(""); setBusy(true);
@@ -43,8 +51,20 @@ export default function TransferDocuments({ id, canEdit }: { id: string; canEdit
             {data.checklist.length === 0 ? <p className="text-[12px] text-mist">No specific trade documents are expected for this transfer.</p> : data.checklist.map((c: any) => (
               <div key={c.type} className="flex flex-wrap items-center gap-3 border-t border-ink/10 first:border-0 py-3 text-[12px]">
                 <Chip status={c.status === "PRESENT" ? "APPROVED" : c.status === "PENDING" ? "NEEDS_INFO" : "DRAFT"} label={c.status.replace("_", " ")} /><strong>{c.label}</strong>
-                <span className="text-mist">from {c.from}</span>{c.detail && <span className="text-mist w-full">{c.detail}</span>}
+                <span className="text-mist">from {c.from}</span>
+                {c.status === "PENDING" && canEdit && ["EFIRA", "EBRC"].includes(c.type) && !reqs.some(r => r.type === c.type && ["REQUESTED", "IN_PROGRESS"].includes(r.status)) && <button className="text-gold hover:underline text-[11px]" onClick={() => request(c.type)}>Request it</button>}
+                {c.detail && <span className="text-mist w-full">{c.detail}</span>}
               </div>))}
+          </Section>
+          <Section title="Certificate requests" hint="Certificates are issued by your bank, the licensed partner or DGFT. We ask them for you and attach the document here when it arrives.">
+            {reqs.length === 0 ? <p className="text-[12px] text-mist">No requests yet.</p> : reqs.map(r => (
+              <div key={r.id} className="flex flex-wrap items-center gap-3 border-t border-ink/10 first:border-0 py-2 text-[12px]">
+                <strong>{r.type}</strong><Chip status={r.status === "FULFILLED" ? "APPROVED" : r.status === "REJECTED" ? "REJECTED" : "IN_REVIEW"} label={r.status.replace("_", " ")} />
+                <span className="text-mist">requested {new Date(r.created_at).toLocaleDateString()}</span>{r.staff_note && <span className="text-[#9A4B12]">{r.staff_note}</span>}
+              </div>))}
+            {canEdit && data.requestable && (
+              <div className="flex flex-wrap gap-2 mt-3">{(data.requestable as string[]).map(t => <button key={t} className="btn-ghost !py-2 !px-3 text-[10px]" onClick={() => request(t)}>Request {t}</button>)}</div>
+            )}
           </Section>
           <Section title="On file">
             {data.data.length === 0 ? <p className="text-[12px] text-mist">Nothing yet.</p> : data.data.map((d: any) => (

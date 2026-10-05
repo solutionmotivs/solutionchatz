@@ -28,3 +28,16 @@ describe("invoice arithmetic", () => {
     expect(safeReturnUrl("not a url")).toBeNull();
   });
 });
+
+import { toXml } from "../lib/reports/xml";
+describe("XML serializer", () => {
+  it("escapes text and attributes, repeats arrays, and sanitises element names", () => {
+    const x = toXml("Root", { "@id": 'a"b<c', Name: "Tom & <Jerry> 'x'", Item: [{ V: 1 }, { V: 2 }], "bad name!": "ok", Ctl: "a\u0001b" });
+    expect(x.startsWith('<?xml version="1.0" encoding="UTF-8"?>')).toBe(true);
+    expect(x).toContain('id="a&quot;b&lt;c"');
+    expect(x).toContain("<Name>Tom &amp; &lt;Jerry&gt; &apos;x&apos;</Name>");
+    expect(x.match(/<Item>/g)).toHaveLength(2);
+    expect(x).toContain("<bad_name_>ok</bad_name_>");
+    expect(x).toContain("<Ctl>ab</Ctl>");
+  });
+});

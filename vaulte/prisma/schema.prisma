@@ -1128,3 +1128,29 @@ model ErpSyncRecord {
   @@unique([organizationId, provider, transferId])
   @@index([status])
 }
+
+/// A customer's request for an eFIRA/FIRC/eBRC/BRC/bank certificate for a completed transfer. Vaulte only asks the issuer
+/// (partner / bank) and tracks the request; it never issues these certificates itself.
+model DocumentRequest {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// EFIRA | FIRC | EBRC | BRC | BANK_CERT
+  type      String
+  /// REQUESTED | IN_PROGRESS | FULFILLED | REJECTED | CANCELLED
+  status    String  @default("REQUESTED")
+  note      String?
+  /// Staff message to the customer (why it was rejected, expected date...)
+  staffNote String?
+
+  organizationId      String
+  transferId          String
+  requestedById       String?
+  fulfilledDocumentId String?
+  fulfilledAt         DateTime?
+
+  @@index([organizationId, status])
+  @@index([transferId, type])
+  @@index([status, createdAt])
+}

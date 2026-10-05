@@ -50,6 +50,8 @@ export async function addDocument(i: AddDocInput) {
     },
   });
   await db.auditLog.create({ data: { organizationId: i.organizationId, userId: i.uploadedById ?? null, action: "document.added", resourceType: "Document", resourceId: doc.id, metadata: { type: i.type, source: i.source, transfer_id: i.transferId ?? null, has_file: !!fileData } } });
+  const { fulfilOpenRequests } = await import("./requests");
+  await fulfilOpenRequests(doc).catch(() => {});
   await emitWebhookEvent({ organizationId: i.organizationId, event: "document.received", data: { document_id: doc.id, type: doc.type, transfer_id: doc.transferId, number: doc.number, status: doc.status } }).catch(() => {});
   return doc;
 }

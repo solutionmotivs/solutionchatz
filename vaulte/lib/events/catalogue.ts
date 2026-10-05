@@ -16,6 +16,7 @@ export const EVENTS: EventDef[] = [
   { name: "kyc.rejected", description: "Identity verification not approved.", sample: { case_id: "cm...", status: "REJECTED" } },
   { name: "kyc.needs_info", description: "Identity verification needs more information.", sample: { case_id: "cm...", status: "NEEDS_INFO" } },
   { name: "compliance.flagged", description: "A transfer or party was put on hold for compliance review.", sample: { transfer_id: "cm...", reason: "SANCTIONS_REVIEW" } },
+  { name: "document.requested", description: "A certificate (eFIRA, FIRC, eBRC, BRC, bank certificate) was requested for a completed transfer.", sample: { request_id: "cm...", type: "EBRC", transfer_id: "cm..." } },
   { name: "document.received", description: "A certificate or document was added to a transfer.", sample: { document_id: "cm...", type: "EFIRA", transfer_id: "cm...", status: "VERIFIED" } },
   { name: "document.verified", description: "Staff verified or rejected an uploaded document.", sample: { document_id: "cm...", status: "VERIFIED" } },
   { name: "ledger.journal.posted", description: "A journal was posted to the ledger for your account (for accounting sync).", sample: { journal_id: "cm...", seq: 42, kind: "MEMO_PAYOUT", transfer_id: "cm...", lines: [] } },

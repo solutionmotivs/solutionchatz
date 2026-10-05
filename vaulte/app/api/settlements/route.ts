@@ -1,8 +1,8 @@
-// GET /api/statements?from=&to=&format=json|csv|xml|pdf — the customer's account statement (session or API key).
+// GET /api/settlements?from=&to=&format=json|csv|xml|pdf — what was sent, converted and paid out, per transfer (session or API key).
 import { NextRequest } from "next/server";
 import { getAuthUser, verifyApiKey } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/utils";
-import { parseFormat, parseRange, renderStatement, reportHeaders, REPORT_NOTE, statementData } from "@/lib/reports/customer";
+import { parseFormat, parseRange, renderSettlements, reportHeaders, REPORT_NOTE, settlementsData } from "@/lib/reports/customer";
 
 export async function GET(req: NextRequest) {
   const user = await getAuthUser();
@@ -13,10 +13,10 @@ export async function GET(req: NextRequest) {
   if (!format) return apiError("VALIDATION_ERROR", "format must be json, csv, xml or pdf", 400, "format");
   const range = parseRange(q);
   if ("error" in range) return apiError("VALIDATION_ERROR", range.error, 400);
-  const d = await statementData(orgId, range.from, range.to);
+  const d = await settlementsData(orgId, range.from, range.to);
   if (format !== "json") {
-    const out = await renderStatement(d, format);
-    return new Response(out.body, { headers: reportHeaders(out.type, `statement-${range.from.toISOString().slice(0, 10)}_${range.to.toISOString().slice(0, 10)}`, out.ext) });
+    const out = await renderSettlements(d, format);
+    return new Response(out.body, { headers: reportHeaders(out.type, `settlements-${range.from.toISOString().slice(0, 10)}_${range.to.toISOString().slice(0, 10)}`, out.ext) });
   }
-  return apiSuccess(JSON.parse(JSON.stringify({ ...d, note: REPORT_NOTE }, (_k, v) => (typeof v === "bigint" ? v.toString() : v))));
+  return apiSuccess({ ...d, note: REPORT_NOTE });
 }
