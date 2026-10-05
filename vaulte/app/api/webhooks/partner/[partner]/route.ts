@@ -22,7 +22,10 @@ export async function POST(req: NextRequest, { params }: { params: { partner: st
   if (!valid) return apiError("INVALID_SIGNATURE", "Signature verification failed", 401);
   let json: unknown;
   try { json = JSON.parse(raw); } catch { return apiError("INVALID_JSON", "Body must be JSON", 400); }
-  const parsed = EventSchema.safeParse(json);
+  // Partners with their own payload format translate it into Vaulte's event shape first.
+  const normalized = partner.normalizeWebhook ? partner.normalizeWebhook(json) : json;
+  if (normalized === null) return apiSuccess({ status: "ignored" });
+  const parsed = EventSchema.safeParse(normalized);
   if (!parsed.success) return apiError("VALIDATION_ERROR", parsed.error.errors[0].message, 400);
   try {
     const result = await processPartnerEvent(params.partner, parsed.data);

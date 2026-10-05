@@ -11,6 +11,8 @@ import {
   calendarYearStart, evaluateTransfer, financialYearStart, type GuardContext, type GuardResult,
 } from "@/lib/guardrails";
 import { buildBreakdown, fromUsd, markupBpsFor, toUsd, validateMargin } from "@/lib/pricing";
+import { buildLiveLegs, summariseFx, type LiveLegs } from "@/lib/fx/aggregator";
+import { MOCK_LEGS } from "@/lib/routing/catalog";
 import { findRoutes, nextRoute, pickAlternates, rankRoutes, routeCostUsd } from "@/lib/routing/engine";
 import {
   amountsFromBreakdown, feesJournal, fundsReceivedJournal, payoutJournals, postJournal, transferBalances, type JournalLine,
@@ -170,11 +172,16 @@ export async function evaluateQuote(orgId: string, input: QuoteInput, opts: { ig
   const sourceAmountUsd = toUsd(input.sourceAmount, input.sourceCurrency, rates);
   const prefer = input.prefer ?? "balanced";
 
+  // Live-priced FX providers (Airwallex, sandbox desks): each returns a firm rate that becomes a routable leg.
+  const live = await buildLiveLegs({
+    kind: input.kind, originCountry: sender.country, destCountry: recipient.country, sourceCurrency: input.sourceCurrency, destCurrency: input.destCurrency,
+    sourceAmountMinor: input.sourceAmount, sourceAmountUsd, midDestPerSource: rates[input.destCurrency] / rates[input.sourceCurrency], fundingMethod: input.fundingMethod,
+  }).catch(() => ({ legs: [], quotes: [], errors: [{ provider: "fx", error: "aggregator failed" }] }) as LiveLegs);
   const all = findRoutes({
     kind: input.kind, originCountry: sender.country, destCountry: recipient.country,
     sourceCurrency: input.sourceCurrency, destCurrency: input.destCurrency, amountUsd: sourceAmountUsd,
     fundingMethod: input.fundingMethod, token: input.token,
-  });
+  }, { legs: [...MOCK_LEGS, ...live.legs] });
   if (!all.length) {
     throw new ServiceError("NO_ROUTE", "No compliant route is available for this corridor, amount and type", 422);
   }
@@ -208,6 +215,8 @@ export async function evaluateQuote(orgId: string, input: QuoteInput, opts: { ig
     route: chosen, kind: input.kind, sourceCurrency: input.sourceCurrency, destCurrency: input.destCurrency,
     sourceAmountMinor: input.sourceAmount, rates, markupBps,
   });
+  const fx = summariseFx(chosen.legs.find(l => l.live), live, sourceAmountUsd);
+  if (fx) breakdown.fx = fx;
   const margin = validateMargin(breakdown);
   if (!margin.ok) throw new ServiceError("PRICING_REJECTED", margin.reason ?? "Quote rejected", 422);
 
@@ -439,7 +448,12 @@ export async function dispatchPayout(transferId: string): Promise<Transfer> {
   const leg = lastLeg(route);
   try {
     const invoice = t.invoiceId ? await db.invoice.findUnique({ where: { id: t.invoiceId }, select: { number: true } }) : null;
+    const bank = await db.bankAccount.findFirst({ where: { entityId: t.recipientEntityId, currency: t.destCurrency }, orderBy: [{ isVerified: "desc" }, { createdAt: "desc" }] });
     const res = await getPartner(leg.partner).createPayout({
+      beneficiary: bank ? {
+        accountName: bank.accountName, entityType: t.recipient.entityType === "INDIVIDUAL" ? "PERSONAL" : "COMPANY", bankCountry: bank.country, currency: bank.currency,
+        iban: bank.iban ?? undefined, swiftBic: bank.swiftBic ?? undefined, accountNumber: bank.accountNumber ?? undefined, routingNumber: bank.routingNumber ?? undefined, sortCode: bank.sortCode ?? undefined,
+      } : undefined,
       transferId: t.id, route, destCurrency: t.destCurrency, destAmountMinor: t.destAmount,
       recipientName: t.recipient.legalName, recipientCountry: t.recipient.country,
       purposeCode: t.purposeCode, invoiceNumber: invoice?.number ?? null,
@@ -592,6 +606,13 @@ export async function processPartnerEvent(partnerId: string, ev: PartnerEventInp
   }
 }
 
+/** Partners reference our transfer either by our id or by the id they gave us when the payout was created. */
+async function findTransferForEvent(d: Record<string, any>) {
+  if (d.transfer_id) return db.transfer.findUnique({ where: { id: String(d.transfer_id) } });
+  if (d.transfer_ref) return db.transfer.findFirst({ where: { externalRef: String(d.transfer_ref) } });
+  return null;
+}
+
 async function routeEvent(partnerId: string, ev: PartnerEventInput): Promise<boolean> {
   const d = ev.data as Record<string, any>;
   switch (ev.type) {
@@ -619,13 +640,13 @@ async function routeEvent(partnerId: string, ev: PartnerEventInput): Promise<boo
       return true;
     }
     case "payout.completed": {
-      const t = await db.transfer.findUnique({ where: { id: String(d.transfer_id) } });
+      const t = await findTransferForEvent(d);
       if (!t) return false;
       await onPayoutCompleted(t.id, d.efira_ref ?? null);
       return true;
     }
     case "payout.failed": {
-      const t = await db.transfer.findUnique({ where: { id: String(d.transfer_id) } });
+      const t = await findTransferForEvent(d);
       if (!t || t.status !== "PAYING_OUT") return false;
       await handlePayoutFailure(t.id, String(d.reason ?? "partner payout failed"));
       return true;

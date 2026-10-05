@@ -82,8 +82,9 @@ export function findRoutes(req: RouteRequest, opts: RouteOptions = {}): Route[] 
     return finalise(routes, req);
   }
 
-  // 1) Direct fiat -> fiat (same currency, local rails)
+  // 1) Direct fiat -> fiat (local rails, or a live-priced FX provider). Never with stablecoin funding.
   for (const l of legs) {
+    if (req.fundingMethod === "STABLECOIN") break;
     if (l.kind === "DIRECT" && l.srcCurrency === src && l.destCurrency === dst && l.jurisdiction !== "IN") {
       routes.push(buildRoute([l], null, null));
     }

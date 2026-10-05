@@ -69,7 +69,9 @@ export async function getLiveRates(
     THB: 35.2, IDR: 15680, PHP: 55.8, SAR: 3.75,
   };
 
+  // Never quote real money from a hard-coded table: in production a missing live rate means "no quote".
   for (const target of missing) {
+    if (process.env.NODE_ENV === "production") break;
     if (!cached[target] && FALLBACK[target]) {
       cached[target] = FALLBACK[target];
     }

@@ -2,6 +2,8 @@
 // Real adapters (Bridge, BVNK, Xflow, OnMeta, ...) plug in here once agreements and keys exist.
 import type { StablecoinPartner } from "./partner";
 import { MockPartner } from "./mock";
+import { AirwallexPartner } from "@/lib/psp/airwallex/partner";
+import { airwallexFromEnv } from "@/lib/psp/airwallex/client";
 
 const cache = new Map<string, StablecoinPartner>();
 
@@ -10,6 +12,13 @@ export function getPartner(id: string): StablecoinPartner {
   if (hit) return hit;
   if (id.startsWith("mock_")) {
     const p = new MockPartner(id);
+    cache.set(id, p);
+    return p;
+  }
+  if (id === "airwallex") {
+    const c = airwallexFromEnv();
+    if (!c) throw new Error("Airwallex is not configured (AIRWALLEX_CLIENT_ID / AIRWALLEX_API_KEY)");
+    const p = new AirwallexPartner(c);
     cache.set(id, p);
     return p;
   }

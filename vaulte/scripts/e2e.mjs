@@ -582,6 +582,60 @@ async function main() {
     }
   }
 
+  console.log("== FX aggregation and rails");
+  {
+    const AUD = await entity(A.key, "Koala Imports Pty Ltd", "AU", "AUD");
+    const US = await entity(A.key, "Texan Exports LLC", "US", "USD");
+    await verify(AUD); await verify(US);
+    const fxq = await api("/api/quotes", { method: "POST", key: A.key, body: { kind: "BUSINESS", sender_entity_id: US, recipient_entity_id: AUD, source_currency: "USD", dest_currency: "AUD", source_amount: 500000, funding_method: "FIAT_LOCAL", prefer: "cheapest" } });
+    check("USD -> AUD (no stablecoin hub for AUD) is quoted through live FX providers", fxq.status === 201 && !!fxq.json.breakdown?.fx, JSON.stringify(fxq.json).slice(0, 300));
+    const fx = fxq.json.breakdown.fx;
+    check("the quote lists every provider compared, with the winner flagged", fx.compared.length >= 3 && fx.compared.filter(c => c.chosen).length === 1 && fx.compared[0].chosen, JSON.stringify(fx.compared));
+    check("the winner has the lowest landed cost of those compared", fx.compared.every(c => c.spread_bps * 5000 / 10000 + c.fee_usd >= fx.compared[0].spread_bps * 5000 / 10000 + fx.compared[0].fee_usd - 1e-9));
+    check("the quote records the firm rate, the mid-market rate and the rail", fx.rate > 0 && fx.mid_rate > 0 && fx.rate < fx.mid_rate && !!fx.rail && !!fx.valid_until);
+    const cheapSmall = await api("/api/quotes", { method: "POST", key: A.key, body: { kind: "BUSINESS", sender_entity_id: US, recipient_entity_id: AUD, source_currency: "USD", dest_currency: "AUD", source_amount: 10000, funding_method: "FIAT_LOCAL", prefer: "cheapest" } });
+    if (!process.env.AIRWALLEX_STUB_URL) check("a different amount can pick a different provider (fee vs spread)", cheapSmall.status === 201 && cheapSmall.json.breakdown.fx.provider !== fx.provider, `${cheapSmall.json.breakdown?.fx?.provider} vs ${fx.provider}`);
+    check("customer cost = partner cost + Vaulte markup, and never below the margin floor", fxq.json.breakdown.markupBps >= 8 && Math.abs(fxq.json.breakdown.totalCostUsd - (fxq.json.breakdown.partnerCostUsd + fxq.json.breakdown.markupUsd)) < 0.01);
+    const inr = await api("/api/quotes", { method: "POST", key: A.key, body: { kind: "BUSINESS", sender_entity_id: US, recipient_entity_id: exporter, source_currency: "USD", dest_currency: "INR", source_amount: 500000, funding_method: "FIAT_LOCAL", prefer: "cheapest" } });
+    check("India corridors never use the general FX providers", inr.status === 201 && !inr.json.breakdown.fx && inr.json.route.partners.some(p => p.includes("in_pacb")), JSON.stringify(inr.json.route?.partners));
+    const swiftAed = await api("/api/quotes", { method: "POST", key: A.key, body: { kind: "BUSINESS", sender_entity_id: US, recipient_entity_id: await entity(A.key, "Dubai Buyer FZE", "AE", "AED"), source_currency: "USD", dest_currency: "AED", source_amount: 500000, funding_method: "FIAT_LOCAL", prefer: "cheapest" } });
+    check("every quote states its rails", swiftAed.status === 201 && swiftAed.json.route.legs.every(l => l.rails.length > 0));
+
+    if (process.env.AIRWALLEX_STUB_URL) {
+      console.log("  (Airwallex stub configured: running the end-to-end adapter checks)");
+      const stub = async () => (await fetch(process.env.AIRWALLEX_STUB_URL + "/_stub/state")).json();
+      const EUR = await entity(A.key, "Berlin Buyer GmbH", "DE", "EUR");
+      await verify(EUR);
+      await db.bankAccount.create({ data: { accountName: "BERLIN BUYER GMBH", currency: "EUR", country: "DE", iban: "DE89370400440532013000", isSandbox: true, entityId: EUR } });
+      const q2 = await api("/api/quotes", { method: "POST", key: A.key, body: { kind: "BUSINESS", sender_entity_id: US, recipient_entity_id: EUR, source_currency: "USD", dest_currency: "EUR", source_amount: 500000, funding_method: "FIAT_LOCAL", prefer: "cheapest" } });
+      check("Airwallex wins USD -> EUR when it is the cheapest (3 bps vs desks and stablecoin route)", q2.status === 201 && q2.json.breakdown.fx?.provider === "airwallex" && q2.json.route.partners.join() === "airwallex", JSON.stringify(q2.json.breakdown?.fx));
+      check("SEPA Instant is the rail", q2.json.route.legs[0].rails[0] === "SEPA_INSTANT");
+      const qi = await api("/api/invoices", { method: "POST", key: A.key, body: { number: `INV-${uniq}-awx`, currency: "USD", line_items: [{ description: "Goods", quantity: 1, unit_price: 500000 }] } });
+      const tr = await api("/api/stablecoin/payins", { method: "POST", key: A.key, body: { quote_id: q2.json.id, invoice_id: qi.json.id } });
+      check("a transfer is created with Airwallex funding instructions", tr.status === 201 && tr.json.funding_instructions?.bank_details?.iban === "GB29NWBK60161331926819", JSON.stringify(tr.json).slice(0, 300));
+      const trId = tr.json.id;
+      await sim(A.key, { event: "fiat.received", transfer_id: trId });
+      const st = await stub();
+      check("payout creates the beneficiary and the transfer at Airwallex with the locked quote", st.beneficiaries.length >= 1 && st.beneficiaries.at(-1).beneficiary.bank_details.iban === "DE89370400440532013000" && String(st.transfers.at(-1)?.quote_id).startsWith("stubq-") && st.transfers.at(-1)?.transfer_currency === "EUR" && st.transfers.at(-1)?.lock_rate_on_create === true, JSON.stringify(st.transfers.at(-1)));
+      const afterPay = await db.transfer.findUnique({ where: { id: trId } });
+      check("the transfer is now paying out with Airwallex's transfer id stored", afterPay.status === "PAYING_OUT" && afterPay.externalRef === st.transfers.at(-1).id, afterPay.status + " " + afterPay.externalRef);
+      const whBody = JSON.stringify({ id: `awxev_${uniq}`, name: "payout.transfer.paid", data: { id: afterPay.externalRef, status: "PAID", request_id: st.transfers.at(-1).request_id, reference: "x" } });
+      const ts = String(Date.now());
+      const goodSig = createHmac("sha256", process.env.AIRWALLEX_WEBHOOK_SECRET).update(ts + whBody).digest("hex");
+      const bad = await fetch(`${BASE}/api/webhooks/partner/airwallex`, { method: "POST", headers: { "x-timestamp": ts, "x-signature": "00" }, body: whBody });
+      check("a bad Airwallex webhook signature is rejected", bad.status === 401);
+      const staleTs = String(Date.now() - 10 * 60_000);
+      const stale = await fetch(`${BASE}/api/webhooks/partner/airwallex`, { method: "POST", headers: { "x-timestamp": staleTs, "x-signature": createHmac("sha256", process.env.AIRWALLEX_WEBHOOK_SECRET).update(staleTs + whBody).digest("hex") }, body: whBody });
+      check("a replayed (stale) webhook is rejected", stale.status === 401);
+      const good = await fetch(`${BASE}/api/webhooks/partner/airwallex`, { method: "POST", headers: { "x-timestamp": ts, "x-signature": goodSig }, body: whBody });
+      check("a signed 'transfer paid' event completes the transfer", good.status === 200 && (await db.transfer.findUnique({ where: { id: trId } })).status === "COMPLETED", await good.text());
+      const dup = await fetch(`${BASE}/api/webhooks/partner/airwallex`, { method: "POST", headers: { "x-timestamp": ts, "x-signature": goodSig }, body: whBody });
+      check("the same event delivered twice is harmless", dup.status === 200 && (await dup.json()).status === "duplicate");
+      const bal = await balances(trId);
+      check("ledger balances to zero for the Airwallex transfer", Object.values(bal).reduce((a, b) => a + b, 0n) === 0n);
+    }
+  }
+
   console.log("== Webhooks");
   const received = [];
   const server = http.createServer((req, res) => {

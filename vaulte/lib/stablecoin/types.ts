@@ -45,6 +45,8 @@ export interface Leg {
   maxUsd: number;
   kinds: TransferKindT[];
   indiaAuth?: IndiaAuth;
+  /** Present on legs priced live by an FX provider at quote time (rate is firm until validUntil). */
+  live?: { provider: string; quoteId?: string; rate: number; midRate: number; validUntil: string };
 }
 
 export interface Route {
@@ -82,4 +84,17 @@ export interface CostBreakdown {
   destAmountUsd: number;
   bankWireEstimateCostUsd: number;
   savingsVsBankUsd: number;
+  /** Set when the cheapest route uses a live-priced FX provider: which providers were compared. */
+  fx?: FxSummary;
+}
+
+export interface FxSummary {
+  provider: string;
+  rate: number;
+  mid_rate: number;
+  spread_bps: number;
+  rail: string;
+  valid_until: string;
+  compared: { provider: string; rate: number; spread_bps: number; fee_usd: number; rail: string; eta_seconds: number; chosen: boolean }[];
+  errors: { provider: string; error: string }[];
 }
