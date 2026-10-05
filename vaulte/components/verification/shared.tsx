@@ -43,3 +43,12 @@ export const PURPOSE_LABELS: Record<string, string> = {
   MARKETPLACE_PAYOUTS: "Marketplace payouts", FAMILY_MAINTENANCE: "Family support or gifts", LRS_OUTWARD: "Remittance abroad (LRS)",
   FREELANCE_RECEIPTS: "Freelance income", GIFT_OR_SUPPORT_RECEIVED: "Personal money received",
 };
+
+export function ProgressBar({ done, total, percent }: { done: number; total: number; percent: number }) {
+  return (
+    <div className="mb-6" role="progressbar" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100} aria-label="Verification progress">
+      <div className="flex justify-between text-[10px] uppercase tracking-widest text-mist mb-1"><span>{done} of {total} required steps done</span><span>{percent}%</span></div>
+      <div className="h-1.5 bg-ink/10"><div className="h-1.5 bg-gold transition-all" style={{ width: `${percent}%` }} /></div>
+    </div>
+  );
+}

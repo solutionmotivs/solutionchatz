@@ -239,3 +239,10 @@ export function missingForSubmission(req: Requirements, snap: CaseSnapshot): Mis
   if (total > 100.0001) out.push({ section: "person", key: "UBO", label: "Ownership percentages add up to more than 100%" });
   return out;
 }
+
+/** How much of the required work is done: shown as a progress bar so the form never feels endless. */
+export function progressOf(req: Requirements, missing: MissingItem[]): { done: number; total: number; percent: number } {
+  const total = req.profile.filter(f => f.required).length + req.items.filter(i => i.required).length + req.people.reduce((n, p) => n + p.min, 0) + req.documents.filter(d => d.required).length;
+  const done = Math.max(0, total - missing.length);
+  return { done, total, percent: total ? Math.min(100, Math.round((done / total) * 100)) : 100 };
+}

@@ -20,11 +20,20 @@ export default function VerificationList({ role, accountType, country, orgName, 
   const [err, setErr] = useState("");
   const canEdit = role === "OWNER" || role === "ADMIN";
 
+  const [preview, setPreview] = useState<any>(null);
   useEffect(() => { api("/api/verification").then(r => { if (r.ok) setCases(r.data.data); setLoading(false); }); }, []);
 
   const targetEntity = entities.find(e => e.id === target);
   const kind = target === "ORG" ? (accountType === "INDIVIDUAL" ? "KYC" : "KYB") : targetEntity?.entityType === "INDIVIDUAL" ? "KYC" : "KYB";
   const purposeList = kind === "KYB" ? KYB_PURPOSES : KYC_PURPOSES;
+
+  const subjectCountry = target === "ORG" ? country : targetEntity?.country ?? country;
+  useEffect(() => {
+    if (!picked.length) { setPreview(null); return; }
+    let live = true;
+    api(`/api/verification/requirements?kind=${kind}&country=${subjectCountry}&purposes=${picked.join(",")}`).then(r => { if (live) setPreview(r.ok ? r.data : null); });
+    return () => { live = false; };
+  }, [picked, kind, subjectCountry]);
 
   async function start() {
     setErr("");
@@ -72,6 +81,17 @@ export default function VerificationList({ role, accountType, country, orgName, 
               </label>
             ))}
           </div>
+          {preview && (
+            <div className="border border-ink/10 px-4 py-3 mb-5 text-[12px] text-ink leading-relaxed">
+              <div className="font-serif text-lg mb-1">What you will need for {subjectCountry}</div>
+              <div className="text-[10px] uppercase tracking-widest text-mist mt-2">Numbers</div>
+              <ul className="list-disc pl-5">{preview.items.filter((i: any) => i.required).map((i: any) => <li key={i.code}>{i.label}</li>)}</ul>
+              <div className="text-[10px] uppercase tracking-widest text-mist mt-2">Documents</div>
+              <ul className="list-disc pl-5">{preview.documents.filter((d: any) => d.required).map((d: any) => <li key={d.type}>{d.label}</li>)}</ul>
+              {preview.people.length > 0 && <p className="mt-2">People: {preview.people.map((p: any) => p.label.toLowerCase()).join(", ")} (owners above {preview.ubo_threshold_pct}%).</p>}
+              {preview.registry_info && <p className="text-[11px] text-slate mt-2">Checked against: {preview.registry_info.name}</p>}
+            </div>
+          )}
           {err && <ErrorBox message={err} />}
           <button className="btn-primary disabled:opacity-40" disabled={!picked.length} onClick={start}>Start {kind === "KYB" ? "business" : "identity"} verification →</button>
         </Section>

@@ -8,7 +8,8 @@ import { sendEmail } from "@/lib/email/sender";
 import { verificationUpdateEmail } from "@/lib/email/templates";
 import { activatePendingTransfers } from "@/lib/stablecoin/service";
 import { getProvider, type CheckCode, type CheckResult } from "./providers";
-import { type CaseKind, type Requirements, missingForSubmission, requirementsFor, validPurposes } from "./requirements";
+import { type CaseKind, type Requirements, missingForSubmission, progressOf, requirementsFor, validPurposes } from "./requirements";
+import { idTypesFor, registryInfo } from "./countries";
 import { approvalsNeeded, assessRisk, nextReviewDate, tierLimits, type Tier } from "./risk";
 import { mask, normalise } from "./validators";
 import { lookupRegistry, nameMatchScore, type RegistryRecord } from "./registries";
@@ -52,8 +53,8 @@ export function presentCase(c: FullCase) {
       ownership_pct: p.ownershipPct, is_pep: p.isPep, pan_masked: p.panMasked, pan_status: p.panStatus, id_type: p.idType,
     })),
     documents: c.documents.map(d => ({ id: d.id, type: d.type, person_id: d.personId, filename: d.filename, size: d.size, status: d.status, reject_reason: d.rejectReason, uploaded_at: d.createdAt })),
-    requirements: { profile: req.profile, items: req.items.map(({ validate: _v, ...r }) => r), documents: req.documents, people: req.people, ubo_threshold_pct: req.uboThresholdPct, notes: req.notes },
-    missing,
+    requirements: { profile: req.profile, items: req.items.map(({ validate: _v, ...r }) => r), documents: req.documents, people: req.people, ubo_threshold_pct: req.uboThresholdPct, notes: req.notes, registry_info: registryInfo(c.country), id_types: idTypesFor(c.country) },
+    missing, progress: progressOf(req, missing),
   };
 }
 

@@ -3,9 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/client-api";
 import { ErrorBox } from "@/components/auth/AuthShell";
 import { COUNTRIES } from "@/lib/countries";
-import { Chip, PURPOSE_LABELS, Section, Shell } from "./shared";
-
-const ID_TYPES = ["PASSPORT", "NATIONAL_ID", "DRIVING_LICENCE", "VOTER_ID", "RESIDENCE_PERMIT", "MASKED_AADHAAR"];
+import { Chip, ProgressBar, PURPOSE_LABELS, Section, Shell } from "./shared";
 
 export default function VerificationCase({ id, canEdit }: { id: string; canEdit: boolean }) {
   const [c, setC] = useState<any>(null);
@@ -45,10 +43,17 @@ export default function VerificationCase({ id, canEdit }: { id: string; canEdit:
       {(c.status === "IN_REVIEW" || c.status === "SUBMITTED") && <Banner tone="wait">Submitted. Our team is reviewing your information. You will get an email when there is an update.</Banner>}
       {c.status === "NEEDS_INFO" && <Banner tone="warn"><strong>More information needed.</strong> {c.decision_note}</Banner>}
       {c.status === "REJECTED" && <Banner tone="bad"><strong>Not approved.</strong> {c.decision_note}</Banner>}
+      {editable && c.progress && <ProgressBar {...c.progress} />}
+      {req.registry_info && (
+        <p className="text-[11px] text-slate mb-4 leading-relaxed">
+          Official source for {c.country}: <a className="text-gold hover:underline" href={req.registry_info.url} target="_blank" rel="noopener noreferrer">{req.registry_info.name}</a>.
+          {req.registry_info.mode === "MANUAL" ? " We cannot check this register automatically yet, so a reviewer will confirm your numbers against your documents." : " Where we can, we look your number up there and fill in the registered name."}
+        </p>
+      )}
       {req.notes.length > 0 && <ul className="mb-6 text-[11px] text-slate leading-relaxed list-disc pl-5">{req.notes.map((n: string) => <li key={n}>{n}</li>)}</ul>}
       {err && <ErrorBox message={err} />}
 
-      <ProfileSection c={c} editable={editable} onSaved={apply} setErr={setErr} />
+      <ProfileSection key={JSON.stringify(c.profile ?? {})} c={c} editable={editable} onSaved={apply} setErr={setErr} />
       <ItemsSection c={c} editable={editable} onSaved={apply} setErr={setErr} />
       <PeopleSection c={c} editable={editable} onSaved={apply} setErr={setErr} />
       <DocsSection c={c} editable={editable} onSaved={apply} setErr={setErr} />
@@ -112,6 +117,24 @@ function ItemsSection({ c, editable, onSaved, setErr }: SectionProps) {
   const [vals, setVals] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState("");
   const [note, setNote] = useState<Record<string, string>>({});
+  const [found, setFound] = useState<Record<string, any>>({});
+  async function lookup(code: string) {
+    const value = (vals[code] ?? "").trim();
+    if (value.length < 4) return;
+    setErr(""); setBusy("L" + code);
+    const q = new URLSearchParams({ country: c.country, code, value });
+    const legal = (c.profile as any)?.legal_name; if (legal) q.set("name", legal);
+    const r = await api(`/api/verification/lookup?${q}`);
+    setBusy("");
+    if (!r.ok) { setFound({ ...found, [code]: { error: r.error?.message ?? "Lookup failed" } }); return; }
+    setFound({ ...found, [code]: r.data });
+  }
+  async function useName(code: string, name: string, address?: string | null) {
+    const patch: Record<string, string> = { legal_name: name };
+    if (address && !(c.profile as any)?.address) patch.address = address;
+    const r = await api(`/api/verification/${c.id}`, { method: "PATCH", body: { profile: patch } });
+    if (r.ok) onSaved(r.data); else setErr(r.error?.message ?? "Could not save");
+  }
   async function save(code: string) {
     setErr(""); setBusy(code);
     const r = await api(`/api/verification/${c.id}/items/${code}`, { method: "PUT", body: { value: vals[code] ?? "" } });
@@ -119,27 +142,46 @@ function ItemsSection({ c, editable, onSaved, setErr }: SectionProps) {
     if (!r.ok) return setErr(r.error?.message ?? "Could not save");
     onSaved(r.data.case);
     setVals({ ...vals, [code]: "" });
-    setNote({ ...note, [code]: r.data.result.status === "VERIFIED" ? "Verified" : r.data.result.status === "FAILED" ? `Check failed: ${r.data.result.reason ?? "does not match"}` : "Saved; a reviewer will confirm it from your documents" });
+    const name = r.data.registered_name ? ` Registered name: ${r.data.registered_name}.` : "";
+    setNote({ ...note, [code]: r.data.result.status === "VERIFIED" ? `Verified.${name}` : r.data.result.status === "FAILED" ? `Check failed: ${r.data.result.reason ?? "does not match"}` : `Saved; a reviewer will confirm it.${name}` });
   }
   return (
-    <Section title="Registrations and bank account" hint="Numbers are encrypted. Where an official source can be checked automatically, we do it as soon as you save.">
+    <Section title="Registrations and bank account" hint="Numbers are encrypted. Where an official source can be checked automatically, we do it as soon as you save, and we can fill in the registered legal name for you.">
       {req(c).items.map((it: any) => {
         const have = c.items.find((x: any) => x.code === it.code);
+        const f = found[it.code];
         return (
           <div key={it.code} className="border-t border-ink/10 first:border-0 py-4">
             <div className="flex flex-wrap items-center gap-3 mb-1">
               <span className="text-[12px] text-ink">{it.label}{it.required ? " *" : ""}</span>
               {have && <><Chip status={have.status} /><span className="text-[11px] text-mist">{have.masked}</span></>}
+              {it.registry && it.autoVerifiable && <span className="text-[9px] uppercase tracking-widest text-gold">auto-check</span>}
             </div>
             <p className="text-[10px] text-mist mb-2">{it.help}</p>
+            {have?.details?.registered_name && <p className="text-[11px] text-slate mb-2">Registered name on file: <strong>{String(have.details.registered_name)}</strong></p>}
             {have?.status === "FAILED" && <p className="text-[11px] text-[#9B2C2C] mb-2">{have.details?.reason ?? "This did not verify."} Please correct and save again.</p>}
             {note[it.code] && have?.status !== "FAILED" && <p className="text-[11px] text-slate mb-2">{note[it.code]}</p>}
             {editable && (
               <div className="flex gap-2">
-                <input className="input-field" placeholder={have ? "Enter a new value to replace" : "Enter value"} value={vals[it.code] ?? ""} onChange={e => setVals({ ...vals, [it.code]: e.target.value })} autoComplete="off" />
+                <input className="input-field" placeholder={have ? "Enter a new value to replace" : "Enter value"} value={vals[it.code] ?? ""} onChange={e => setVals({ ...vals, [it.code]: e.target.value })} onBlur={() => { if (it.registry && it.autoVerifiable) lookup(it.code); }} autoComplete="off" />
+                {it.registry && it.autoVerifiable && <button className="btn-ghost whitespace-nowrap disabled:opacity-40" disabled={!vals[it.code] || busy === "L" + it.code} onClick={() => lookup(it.code)}>{busy === "L" + it.code ? "Looking up…" : "Look up"}</button>}
                 <button className="btn-ghost whitespace-nowrap disabled:opacity-40" disabled={!vals[it.code] || busy === it.code} onClick={() => save(it.code)}>{busy === it.code ? "Checking…" : "Save & check"}</button>
               </div>
             )}
+            {editable && f && !f.error && (
+              <div className="mt-2 border border-ink/10 px-3 py-2 text-[11px] text-slate leading-relaxed">
+                {f.status === "FOUND" && <>
+                  <div><strong className="text-ink">{f.legal_name ?? "Found (no name published)"}</strong>{f.active === false ? " · not active" : ""}</div>
+                  {f.address && <div>{f.address}</div>}
+                  {f.name_match != null && f.name_match < 0.5 && <div className="text-[#9A4B12]">This differs from the name you entered; a reviewer will compare them.</div>}
+                  {f.legal_name && <button className="text-gold hover:underline mt-1" onClick={() => useName(it.code, f.legal_name, f.address)}>Use this as my legal name</button>}
+                  <div className="text-[10px] text-mist mt-1">Source: <a className="hover:underline" href={f.source_url} target="_blank" rel="noopener noreferrer">{f.source}</a></div>
+                </>}
+                {f.status === "NOT_FOUND" && <div className="text-[#9B2C2C]">{f.reason ?? "Not found in the official register."} Check the number and try again.</div>}
+                {f.status === "UNAVAILABLE" && <div>The official register could not be reached ({f.reason}). You can still save; a reviewer will confirm it.</div>}
+              </div>
+            )}
+            {editable && f?.error && <p className="mt-2 text-[11px] text-[#9A4B12]">{f.error}</p>}
           </div>
         );
       })}
@@ -189,7 +231,7 @@ function PeopleSection({ c, editable, onSaved, setErr }: SectionProps) {
           <div><label className="label-text">Lives in</label><select className="input-field" value={f.country_of_residence} onChange={e => setF({ ...f, country_of_residence: e.target.value })}>{COUNTRIES.map(([code, name]) => <option key={code} value={code}>{name}</option>)}</select></div>
           {f.role === "UBO" && <div><label className="label-text">Ownership %</label><input className="input-field" type="number" min={0} max={100} value={f.ownership_pct} onChange={e => setF({ ...f, ownership_pct: e.target.value })} /></div>}
           {c.country === "IN" && <div><label className="label-text">PAN (optional)</label><input className="input-field" value={f.pan} onChange={e => setF({ ...f, pan: e.target.value.toUpperCase() })} maxLength={10} autoComplete="off" /></div>}
-          <div><label className="label-text">ID type</label><select className="input-field" value={f.id_type} onChange={e => setF({ ...f, id_type: e.target.value })}><option value="">Select…</option>{ID_TYPES.map(t => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}</select></div>
+          <div><label className="label-text">ID type</label><select className="input-field" value={f.id_type} onChange={e => setF({ ...f, id_type: e.target.value })}><option value="">Select…</option>{(req(c).id_types ?? []).map((t: string) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}</select></div>
           <label className="flex items-center gap-2 text-[12px] text-ink sm:col-span-2 mt-6"><input type="checkbox" checked={f.is_pep} onChange={e => setF({ ...f, is_pep: e.target.checked })} /> Holds or has held a prominent public position, or is a close family member/associate of someone who does</label>
           <div className="sm:col-span-3"><button className="btn-primary disabled:opacity-40" disabled={f.full_name.length < 2} onClick={add}>Add person</button></div>
         </div>

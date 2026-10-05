@@ -169,3 +169,15 @@ export function individualNotes(c: string): string[] {
     default: return [];
   }
 }
+
+/** ID document types that make sense for a country (the API accepts any known type; this just keeps the form short). */
+export function idTypesFor(c: string): string[] {
+  if (c === "IN") return ["PASSPORT", "VOTER_ID", "DRIVING_LICENCE", "MASKED_AADHAAR"];
+  if (c === "AE") return ["EMIRATES_ID", "PASSPORT", "RESIDENCE_PERMIT"];
+  if (c === "SA") return ["NATIONAL_ID", "IQAMA", "PASSPORT"];
+  if (c === "MY") return ["NRIC", "PASSPORT", "RESIDENCE_PERMIT"];
+  if (c === "NP") return ["CITIZENSHIP_CERT", "NATIONAL_ID", "PASSPORT", "DRIVING_LICENCE"];
+  if (isEuCountry(c)) return ["NATIONAL_ID", "PASSPORT", "RESIDENCE_PERMIT", "DRIVING_LICENCE"];
+  if (["AU", "GB", "US"].includes(c)) return ["PASSPORT", "DRIVING_LICENCE", "RESIDENCE_PERMIT"];
+  return ["PASSPORT", "NATIONAL_ID", "DRIVING_LICENCE", "RESIDENCE_PERMIT"];
+}
