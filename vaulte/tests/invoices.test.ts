@@ -50,3 +50,18 @@ describe("escrow agent selection", () => {
     expect(() => getEscrowAgent(false, "mock_escrow")).toThrow(EscrowNotConfigured);
   });
 });
+
+import { closedCountries, liveCountries } from "../lib/routing/corridors";
+describe("live-corridor allowlist", () => {
+  const env = (v?: string) => ({ LIVE_COUNTRIES: v } as unknown as NodeJS.ProcessEnv);
+  it("is off when unset, never restricts test mode, and needs BOTH countries open", () => {
+    expect(liveCountries(env())).toBeNull();
+    expect(closedCountries("IN", "US", false, env())).toEqual([]);
+    expect(closedCountries("IN", "NP", true, env("US"))).toEqual([]);
+    expect(closedCountries("IN", "US", false, env("in, us"))).toEqual([]);
+    expect(closedCountries("IN", "NP", false, env("IN,US"))).toEqual(["NP"]);
+    expect(closedCountries("DE", "NP", false, env("IN,US")).sort()).toEqual(["DE", "NP"]);
+    expect(closedCountries("IN", "IN", false, env("US"))).toEqual(["IN"]);
+    expect(Array.from(liveCountries(env("in,,xx1, us")) ?? [])).toEqual(["IN", "US"]);
+  });
+});

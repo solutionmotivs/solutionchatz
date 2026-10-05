@@ -13,6 +13,9 @@
 | L5 | Terms, Privacy, AML policy, grievance page: replace the drafts, then set `LEGAL_REVIEWED=true` | Counsel | Drafts in `app/legal/*` are clearly marked. |
 | L6 | Appoint compliance officer / MLRO, Grievance Officer, DPO (if required); board-approved AML/CFT programme and staff training record | Management | |
 | L7 | Data protection: DPDP Act and GDPR assessment (records of processing, DPA with processors, breach procedure, cross-border transfer basis); RBI payment-data storage requirement if you become an authorised payment system operator or your partner requires it | Counsel + CTO | Set `DATA_REGION`; use an India-region S3 bucket and database for Indian payment data if required. |
+| L9 | Read `docs/COMPLIANCE_MEMO.md` (country-by-country draft memo, the three perimeter questions, counsel question list). List only counsel-cleared countries in `LIVE_COUNTRIES`; preflight fails without it. Additional adapters now exist for Currencycloud and Wise (`lib/psp/*`, contract-tested only; run `scripts/partner-smoke.mjs`). | Counsel | Memo is a draft by an AI assistant; every citation must be verified. |
+| L10 | Escrow: live partner escrow stays disabled until you contract a licensed escrow agent and register its adapter (`lib/escrow/agent.ts`). Pay-on-approval milestone billing works without one and is labelled "not escrow". Counsel must approve dispute handling and deemed-approval terms. | Counsel + Business | |
+| L11 | Terms were bumped to version 2026-10-05 (merchants, escrow, certificates, registry checks, disclosures, acceptable use); users are asked to re-accept. Replace every `[COUNSEL]` placeholder. | Counsel | |
 | L8 | Marketing claims: no "licensed", "fastest", "cheapest", "compliant" or "no fees" claim unless you can substantiate it | Marketing + Counsel | The product pages avoid these; keep it that way. |
 
 ## 2. Providers and keys (YOU)

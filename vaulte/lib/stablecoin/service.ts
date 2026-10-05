@@ -1,6 +1,7 @@
 // Orchestration for stablecoin / fiat cross-border transfers.
 // Vaulte never custodies funds: partners receive money, convert, and pay out. This service
 // picks routes, enforces guardrails, keeps the memo ledger, and reacts to partner events.
+import { closedCountries } from "@/lib/routing/corridors";
 import { onInvoicePaid as onEscrowInvoicePaid } from "@/lib/escrow/service";
 import { tierLimits } from "@/lib/kyc/risk";
 import { log } from "@/lib/log";
@@ -185,6 +186,8 @@ export async function evaluateQuote(orgId: string, input: QuoteInput, opts: { ig
   // only the contracted partner catalogue (PARTNER_CATALOG_JSON) and live providers. No mock partner can ever carry live money.
   const orgRow = await db.organization.findUnique({ where: { id: orgId }, select: { kybStatus: true } });
   const sandbox = orgRow?.kybStatus !== "APPROVED";
+  const closed = closedCountries(sender.country, recipient.country, sandbox);
+  if (closed.length) throw new ServiceError("COUNTRY_NOT_ENABLED", `Live payments are not yet available for ${closed.join(", ")}. Test mode works everywhere; we open countries one by one after legal review.`, 422);
   const baseLegs = sandbox ? MOCK_LEGS : realLegs();
   // Live-priced FX providers (Airwallex, sandbox desks): each returns a firm rate that becomes a routable leg.
   const live = await buildLiveLegs({ sandbox,
@@ -308,6 +311,8 @@ export async function createTransferFromQuote(orgId: string, input: CreateTransf
   const orgNow = await db.organization.findUnique({ where: { id: orgId }, select: { kybStatus: true } });
   const sandboxNow = orgNow?.kybStatus !== "APPROVED";
   assertRouteMode(route, sandboxNow);
+  const closedNow = closedCountries(sender.country, recipient.country, sandboxNow);
+  if (closedNow.length) throw new ServiceError("COUNTRY_NOT_ENABLED", `Live payments are not yet available for ${closedNow.join(", ")}.`, 422);
 
   // Screen both parties again at transfer time (lists change daily); a hit flips their status, which the guardrails then enforce.
   await screenAndFlagEntity(sender, "TRANSFER_PARTY");

@@ -19,6 +19,8 @@ check("kyc", "a real KYC provider (not the mock)", env.KYC_PROVIDER === "sandbox
 check("partners", "live partner catalogue configured", !!(env.PARTNER_CATALOG_JSON || env.PARTNER_CATALOG_FILE), "without it no live route exists (fails closed)");
 check("partners", "Airwallex in live mode with a connected-account id", env.AIRWALLEX_ENV === "live" && !!env.AIRWALLEX_ON_BEHALF_OF && !!env.AIRWALLEX_WEBHOOK_SECRET, "needed only if Airwallex is used; connected accounts keep customer funds out of a Vaulte-owned wallet", false);
 check("legal", "company and grievance details set", ["COMPANY_LEGAL_NAME", "COMPANY_ADDRESS", "GRIEVANCE_OFFICER_NAME", "GRIEVANCE_OFFICER_EMAIL", "SUPPORT_EMAIL", "DATA_REGION", "GOVERNING_LAW"].every(k => !!env[k]));
+check("legal", "live countries explicitly listed (LIVE_COUNTRIES): only counsel-cleared countries", !!env.LIVE_COUNTRIES?.trim(), "unset = every corridor your partners cover is open for live money; list only the countries counsel has cleared");
+check("legal", "OPS_EMAIL set (certificate requests and escrow disputes alert a human)", !!env.OPS_EMAIL, "", false);
 check("legal", "legal texts approved by counsel (LEGAL_REVIEWED=true)", env.LEGAL_REVIEWED === "true", "set only after real legal review");
 
 // The running deployment

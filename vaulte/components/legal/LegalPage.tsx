@@ -19,7 +19,7 @@ export default function LegalPage({ title, children }: { title: string; children
         <div className="legal-body text-[12px] text-slate leading-[1.9] space-y-4">{children}</div>
         <nav className="mt-12 pt-6 border-t border-ink/10 flex flex-wrap gap-6 text-[10px] uppercase tracking-widest text-mist">
           <Link href="/legal/terms" className="hover:text-ink">Terms</Link><Link href="/legal/privacy" className="hover:text-ink">Privacy</Link>
-          <Link href="/legal/aml" className="hover:text-ink">AML policy</Link><Link href="/legal/security" className="hover:text-ink">Security</Link><Link href="/legal/grievance" className="hover:text-ink">Grievance officer</Link>
+          <Link href="/legal/aml" className="hover:text-ink">AML policy</Link><Link href="/legal/acceptable-use" className="hover:text-ink">Acceptable use</Link><Link href="/legal/disclosures" className="hover:text-ink">Fees &amp; risks</Link><Link href="/legal/security" className="hover:text-ink">Security</Link><Link href="/legal/grievance" className="hover:text-ink">Grievance officer</Link>
         </nav>
       </div>
     </main>
