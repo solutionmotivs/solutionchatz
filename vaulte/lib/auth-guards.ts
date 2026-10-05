@@ -41,3 +41,8 @@ export async function requireStaff(req: Request): Promise<Guard> {
   if (!g.user.totpEnabled) return { response: apiError("MFA_REQUIRED", "Enable two-factor authentication to use staff tools", 403) };
   return g;
 }
+
+/** Direct status overrides skip the KYC/KYB review. Allowed outside production; in production only if explicitly enabled. */
+export function manualOverrideAllowed(): boolean {
+  return process.env.NODE_ENV !== "production" || process.env.ALLOW_MANUAL_VERIFY_OVERRIDE === "true";
+}

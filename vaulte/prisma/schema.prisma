@@ -64,6 +64,10 @@ enum WebhookEventType {
   INVOICE_PAID
   KYB_APPROVED
   KYB_REJECTED
+  KYB_NEEDS_INFO
+  KYC_APPROVED
+  KYC_REJECTED
+  KYC_NEEDS_INFO
   COMPLIANCE_FLAGGED
   FX_RATE_UPDATED
   TRANSFER_CREATED
@@ -168,19 +172,19 @@ model Organization {
   currentMonthVolumeUsd BigInt         @default(0)
   volumeResetAt         DateTime?
 
-  users           User[]
-  entities        Entity[]
-  apiKeys         ApiKey[]
-  payments        Payment[]
-  invoices        Invoice[]
-  webhooks        WebhookEndpoint[]
-  ubos            UBO[]
-  auditLogs       AuditLog[]
-  transfers       Transfer[]
-  quotes          Quote[]
-  virtualAccounts VirtualAccount[]
-  accountType     String            @default("BUSINESS") // BUSINESS (KYB) | INDIVIDUAL (KYC)
-  invites         Invite[]
+  users             User[]
+  entities          Entity[]
+  apiKeys           ApiKey[]
+  payments          Payment[]
+  invoices          Invoice[]
+  webhooks          WebhookEndpoint[]
+  auditLogs         AuditLog[]
+  transfers         Transfer[]
+  quotes            Quote[]
+  virtualAccounts   VirtualAccount[]
+  accountType       String             @default("BUSINESS") // BUSINESS (KYB) | INDIVIDUAL (KYC)
+  invites           Invite[]
+  verificationCases VerificationCase[]
 
   @@index([slug])
   @@index([kybStatus])
@@ -242,24 +246,6 @@ model Session {
   @@index([userId])
 }
 
-model UBO {
-  id        String   @id @default(cuid())
-  createdAt DateTime @default(now())
-
-  name           String
-  nationality    String?
-  ownershipPct   Float
-  idDocumentUrl  String?
-  sanctionsCheck Boolean   @default(false)
-  pepCheck       Boolean   @default(false)
-  verifiedAt     DateTime?
-
-  organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-
-  @@index([organizationId])
-}
-
 model Entity {
   id        String   @id @default(cuid())
   createdAt DateTime @default(now())
@@ -286,10 +272,11 @@ model Entity {
 
   bankAccounts      BankAccount[]
   virtualAccounts   VirtualAccount[]
-  sentTransfers     Transfer[]       @relation("TransferSender")
-  receivedTransfers Transfer[]       @relation("TransferRecipient")
-  sentPayments      Payment[]        @relation("SenderEntity")
-  receivedPayments  Payment[]        @relation("RecipientEntity")
+  sentTransfers     Transfer[]         @relation("TransferSender")
+  receivedTransfers Transfer[]         @relation("TransferRecipient")
+  sentPayments      Payment[]          @relation("SenderEntity")
+  receivedPayments  Payment[]          @relation("RecipientEntity")
+  verificationCases VerificationCase[]
 
   @@index([organizationId])
 }
@@ -752,4 +739,127 @@ model Invite {
 
   @@index([organizationId])
   @@index([email])
+}
+
+enum VerificationCaseStatus {
+  DRAFT
+  SUBMITTED
+  IN_REVIEW
+  NEEDS_INFO
+  APPROVED
+  REJECTED
+}
+
+enum VerificationTier {
+  SDD
+  CDD
+  EDD
+}
+
+// One KYC (individual) or KYB (business) file for the account holder or for a sender/recipient entity.
+// Vaulte collects and organises evidence; verification is performed by providers/partners and staff.
+model VerificationCase {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  kind        String // KYB | KYC
+  subjectType String // ORGANIZATION | ENTITY
+  country     String
+  purposes    String[]
+  status      VerificationCaseStatus @default(DRAFT)
+  tier        VerificationTier?
+  riskScore   Int?
+  riskFactors Json?
+  screening   Json?
+  profile     Json                   @default("{}")
+
+  submittedAt  DateTime?
+  decidedAt    DateTime?
+  decidedById  String?
+  decisionNote String?
+  /// Staff who approved so far (EDD needs two different people).
+  approvals    Json      @default("[]")
+  nextReviewAt DateTime?
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  entityId       String?
+  entity         Entity?      @relation(fields: [entityId], references: [id], onDelete: Cascade)
+
+  items     VerificationItem[]
+  people    VerificationPerson[]
+  documents VerificationDocument[]
+
+  @@index([organizationId])
+  @@index([entityId])
+  @@index([status])
+}
+
+model VerificationItem {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  code        String
+  valueEnc    String
+  valueMasked String
+  valueHash   String
+  status      String    @default("PENDING") // PENDING | VERIFIED | FAILED | MANUAL
+  provider    String?
+  providerRef String?
+  result      Json?
+  verifiedAt  DateTime?
+
+  caseId String
+  case   VerificationCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, code])
+}
+
+model VerificationPerson {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  role               String // APPLICANT | UBO | DIRECTOR | SIGNATORY
+  fullName           String
+  dateOfBirth        String?
+  nationality        String?
+  countryOfResidence String?
+  ownershipPct       Float?
+  isPep              Boolean @default(false)
+  panEnc             String?
+  panMasked          String?
+  panStatus          String?
+  idType             String?
+  idMasked           String?
+  screening          Json?
+
+  caseId    String
+  case      VerificationCase       @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  documents VerificationDocument[]
+
+  @@index([caseId])
+}
+
+model VerificationDocument {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  type         String
+  filename     String
+  mime         String
+  size         Int
+  sha256       String
+  storageKey   String
+  status       String  @default("UPLOADED") // UPLOADED | ACCEPTED | REJECTED
+  rejectReason String?
+  uploadedById String?
+
+  caseId   String
+  case     VerificationCase    @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  personId String?
+  person   VerificationPerson? @relation(fields: [personId], references: [id], onDelete: SetNull)
+
+  @@index([caseId])
 }

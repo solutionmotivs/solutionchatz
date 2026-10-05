@@ -2,7 +2,7 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { requireStaff } from "@/lib/auth-guards";
+import { manualOverrideAllowed, requireStaff } from "@/lib/auth-guards";
 import { apiError, apiSuccess } from "@/lib/utils";
 import { emitWebhookEvent } from "@/lib/webhooks/dispatch";
 
@@ -16,6 +16,7 @@ const Schema = z.object({
 export async function POST(req: NextRequest) {
   const staff = await requireStaff(req);
   if (staff.response) return staff.response;
+  if (!manualOverrideAllowed()) return apiError("OVERRIDE_DISABLED", "Manual status overrides are disabled; decide the verification case instead", 403);
   let body: unknown;
   try { body = await req.json(); } catch { return apiError("INVALID_JSON", "Body must be JSON", 400); }
   const parsed = Schema.safeParse(body);

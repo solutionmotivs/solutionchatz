@@ -325,109 +325,26 @@ function StepTestPayment({ orgId, onNext, loading }: {
   );
 }
 
-function StepKYB({ user, org, onNext, loading }: {
+function StepKYB({ org, onNext, loading }: {
   user: AuthUser; org: Props["org"]; onNext: () => void; loading: boolean;
 }) {
-  const [form, setForm] = useState({
-    registrationNumber: org.registrationNumber ?? "",
-    taxId: org.taxId ?? "",
-    uboName: user.name,
-    uboOwnership: "51",
-  });
-  const [submitted, setSubmitted] = useState(org.kybStatus === "IN_REVIEW" || org.kybStatus === "APPROVED");
-
-  async function submitKYB(e: React.FormEvent) {
-    e.preventDefault();
-    await fetch("/api/kyb", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        legal_name: org.legalName ?? org.name,
-        country: org.country ?? "IN",
-        registration_number: form.registrationNumber,
-        tax_id: form.taxId,
-        business_type: org.businessType ?? "technology",
-        ubos: [{ name: form.uboName, ownership_pct: parseFloat(form.uboOwnership) }],
-      }),
-    });
-    setSubmitted(true);
-  }
-
+  const started = org.kybStatus !== "NOT_STARTED";
   return (
     <div>
       <div className="section-tag">Step 4 of 5</div>
-      <h1 className="font-serif text-4xl text-ink mb-3">Verify your<br/><em className="text-gold">business identity.</em></h1>
+      <h1 className="font-serif text-4xl text-ink mb-3">Verify your<br/><em className="text-gold">identity.</em></h1>
       <p className="font-mono text-xs text-mist mb-8 leading-relaxed">
-        Required by law for live payments. Takes ~8 minutes. Automated — no calls, no notarisation.
+        Verification is required before live payments. What we ask for depends on your country and what you will use Vaulte for.
+        You can save progress and finish later. Sandbox payments work while you wait.
       </p>
-
-      {submitted ? (
-        <div className="space-y-4">
-          <div className="border border-gold/25 bg-gold/5 p-5">
-            <div className="font-mono text-[9px] uppercase tracking-widest text-gold mb-3">KYB Submitted — In Review</div>
-            <div className="font-mono text-xs text-slate leading-relaxed">
-              Our automated system is verifying your details against global corporate registries.
-              You&apos;ll receive an email within 24–48 hours.
-            </div>
-            <div className="mt-4 space-y-2">
-              {[
-                { label: "Sanctions screening", done: true },
-                { label: "Company registry lookup", done: false },
-                { label: "UBO verification", done: false },
-                { label: "Document review", done: false },
-              ].map(item => (
-                <div key={item.label} className="flex items-center gap-3 font-mono text-[10px]">
-                  <span className={item.done ? "text-v-green-light" : "text-mist"}>
-                    {item.done ? "✓" : "○"}
-                  </span>
-                  <span className={item.done ? "text-ink" : "text-mist"}>{item.label}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-          <button onClick={onNext} disabled={loading} className="btn-ghost w-full disabled:opacity-60">
-            {loading ? "..." : "Continue to Dashboard →"}
-          </button>
-          <p className="font-mono text-[9px] text-mist text-center">
-            Sandbox payments available while KYB is in review.
-          </p>
-        </div>
-      ) : (
-        <form onSubmit={submitKYB} className="space-y-4">
-          <div>
-            <label className="label-text">Company Registration Number</label>
-            <input className="input-field" value={form.registrationNumber}
-              onChange={e => setForm(f => ({ ...f, registrationNumber: e.target.value }))}
-              placeholder="U72900MH2018PTC312876" required />
-          </div>
-          <div>
-            <label className="label-text">Tax ID / GST / VAT / EIN</label>
-            <input className="input-field" value={form.taxId}
-              onChange={e => setForm(f => ({ ...f, taxId: e.target.value }))}
-              placeholder="29AABCU9603R1ZX" />
-          </div>
-          <div className="border-t border-ink/8 pt-4">
-            <div className="font-mono text-[9px] uppercase tracking-widest text-mist mb-3">Ultimate Beneficial Owner (25%+)</div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="label-text">Full Name</label>
-                <input className="input-field" value={form.uboName}
-                  onChange={e => setForm(f => ({ ...f, uboName: e.target.value }))}
-                  required />
-              </div>
-              <div>
-                <label className="label-text">Ownership %</label>
-                <input type="number" className="input-field" value={form.uboOwnership}
-                  onChange={e => setForm(f => ({ ...f, uboOwnership: e.target.value }))}
-                  min="25" max="100" required />
-              </div>
-            </div>
-          </div>
-          <button type="submit" disabled={loading} className="btn-primary w-full disabled:opacity-60">
-            {loading ? "Submitting..." : "Submit KYB →"}
-          </button>
-        </form>
-      )}
+      <div className="space-y-4">
+        <a href="/dashboard/verification" className="btn-primary w-full block text-center">
+          {started ? "Continue verification →" : "Start verification →"}
+        </a>
+        <button onClick={onNext} disabled={loading} className="btn-ghost w-full disabled:opacity-60">
+          {loading ? "..." : "Skip for now: go to dashboard →"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -440,16 +357,16 @@ function StepGoLive({ onNext, loading }: { onNext: () => void; loading: boolean 
         You&apos;re almost<br/><em className="text-gold">live.</em>
       </h1>
       <p className="font-mono text-xs text-mist mb-8 leading-relaxed">
-        Your account is configured. KYB is in review.
-        While you wait, explore your dashboard and set up your first real invoice.
+        Your account is configured. Finish verification from the dashboard to unlock live payments.
+        Meanwhile, explore the sandbox.
       </p>
 
       <div className="space-y-3 mb-8">
         {[
           { title: "Sandbox Active", desc: "Test payments work right now", done: true },
           { title: "API Keys Ready", desc: "Use your test key to integrate", done: true },
-          { title: "KYB Submitted", desc: "24–48 hour review", done: true },
-          { title: "Live Payments", desc: "Unlocked after KYB approval", done: false },
+          { title: "Verification", desc: "Complete it from the dashboard", done: false },
+          { title: "Live Payments", desc: "Unlocked after verification is approved", done: false },
         ].map(item => (
           <div key={item.title} className={cn(
             "flex items-start gap-4 p-4 border",

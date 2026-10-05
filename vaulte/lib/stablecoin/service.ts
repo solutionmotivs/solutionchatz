@@ -1,6 +1,7 @@
 // Orchestration for stablecoin / fiat cross-border transfers.
 // Vaulte never custodies funds: partners receive money, convert, and pay out. This service
 // picks routes, enforces guardrails, keeps the memo ledger, and reacts to partner events.
+import { tierLimits } from "@/lib/kyc/risk";
 import { Prisma, type Entity, type Transfer } from "@prisma/client";
 import { db } from "@/lib/db";
 import { screenEntity } from "@/lib/compliance/aml";
@@ -84,7 +85,9 @@ async function buildGuardContext(args: {
   excludeTransferId?: string;
 }): Promise<GuardContext> {
   const { sender, recipient, route } = args;
-  const [recipientCount, senderFy] = await Promise.all([
+  const since = (ms: number) => new Date(Date.now() - ms);
+  const notSelf = args.excludeTransferId ? { id: { not: args.excludeTransferId } } : {};
+  const [recipientCount, senderFy, sender24h, sender30d, tierCase] = await Promise.all([
     db.transfer.count({
       where: {
         recipientEntityId: recipient.id, kind: "PERSONAL", status: { in: [...ACTIVE_STATUSES] },
@@ -98,6 +101,9 @@ async function buildGuardContext(args: {
       },
       _sum: { sourceAmountUsd: true },
     }),
+    db.transfer.aggregate({ where: { senderEntityId: sender.id, status: { in: [...ACTIVE_STATUSES] }, createdAt: { gte: since(86_400_000) }, ...notSelf }, _sum: { sourceAmountUsd: true } }),
+    db.transfer.aggregate({ where: { senderEntityId: sender.id, status: { in: [...ACTIVE_STATUSES] }, createdAt: { gte: since(30 * 86_400_000) }, ...notSelf }, _sum: { sourceAmountUsd: true } }),
+    db.verificationCase.findFirst({ where: { entityId: sender.id, status: "APPROVED" }, orderBy: { decidedAt: "desc" }, select: { kind: true, tier: true } }),
   ]);
   const indiaInvolved = sender.country === "IN" || recipient.country === "IN";
   return {
@@ -112,12 +118,14 @@ async function buildGuardContext(args: {
     payoutAssetIsFiat: ["OFFRAMP", "DIRECT", "INDIA_PAYOUT"].includes(lastLeg(route).kind),
     purposeCode: args.purposeCode ?? null,
     invoiceId: args.invoiceId ?? null,
-    sender: partyCtx(sender),
+    sender: { ...partyCtx(sender), limits: tierCase?.tier ? tierLimits(tierCase.kind as "KYB" | "KYC", tierCase.tier) : undefined },
     recipient: partyCtx(recipient),
     indiaAuths: route.legs.flatMap(l => (l.indiaAuth ? [l.indiaAuth] : [])),
     history: {
       recipientTransfersThisCalendarYear: recipientCount,
       senderUsdThisFinancialYear: Number(senderFy._sum.sourceAmountUsd ?? 0n) / 100,
+      senderUsdLast24h: Number(sender24h._sum.sourceAmountUsd ?? 0n) / 100,
+      senderUsdLast30d: Number(sender30d._sum.sourceAmountUsd ?? 0n) / 100,
     },
   };
 }

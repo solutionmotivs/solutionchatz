@@ -22,6 +22,8 @@ export interface PartyCtx {
   country: string;
   /** PAN verified by the partner during KYC (needed for LRS). Vaulte does not store the PAN. */
   panVerified?: boolean;
+  /** Limits from the due-diligence tier granted at KYC/KYB review (whole USD). Absent = no tier on file. */
+  limits?: { perTxnUsd: number; dailyUsd: number; monthlyUsd: number };
 }
 
 export interface GuardContext {
@@ -44,6 +46,8 @@ export interface GuardContext {
   history: {
     recipientTransfersThisCalendarYear: number;
     senderUsdThisFinancialYear: number;
+    senderUsdLast24h?: number;
+    senderUsdLast30d?: number;
   };
 }
 
@@ -86,6 +90,12 @@ export function evaluateTransfer(ctx: GuardContext): GuardResult {
   }
   if (!ctx.sender.verified) add("SENDER_NOT_VERIFIED", "Sender must complete KYB/KYC with the partner first");
   if (!ctx.recipient.verified) add("RECIPIENT_NOT_VERIFIED", "Recipient must complete KYB/KYC with the partner first");
+  const lim = ctx.sender.limits;
+  if (lim) {
+    if (ctx.amountUsd > lim.perTxnUsd) add("TIER_TXN_LIMIT", `Above the USD ${lim.perTxnUsd.toLocaleString("en-US")} per-transfer limit for the sender's verification level`);
+    if ((ctx.history.senderUsdLast24h ?? 0) + ctx.amountUsd > lim.dailyUsd) add("TIER_DAILY_LIMIT", `Would exceed the USD ${lim.dailyUsd.toLocaleString("en-US")} daily limit for the sender's verification level`);
+    if ((ctx.history.senderUsdLast30d ?? 0) + ctx.amountUsd > lim.monthlyUsd) add("TIER_MONTHLY_LIMIT", `Would exceed the USD ${lim.monthlyUsd.toLocaleString("en-US")} 30-day limit for the sender's verification level`);
+  }
   if (ctx.kind === "BUSINESS" && ctx.sender.entityType !== "BUSINESS") {
     add("KIND_MISMATCH", "Business transfers must be sent by a business entity");
   }

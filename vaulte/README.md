@@ -64,3 +64,11 @@ Sandbox walk-through: register -> verify the emailed code -> create entities -> 
 - Staff accounts (`isStaff`) must enable two-factor before any `/api/admin/*` route works. Create the first one with `node scripts/create-staff.mjs <email> <name>` and change the temporary password at first sign-in. `CRON_SECRET` is only for the cron endpoint.
 - Production needs `RESEND_API_KEY` (no email is faked in production), `OTP_PEPPER` and a 32-byte hex `ENCRYPTION_KEY`. `AUTH_EXPOSE_DEV_OTP` is ignored in production.
 - The legal pages under `/legal/*` are placeholders and must be replaced with counsel-approved text before launch.
+
+## KYC / KYB (M2)
+- Requirement matrix per region and purpose: `lib/kyc/requirements.ts` (India business: PAN, CIN/LLPIN, GSTIN, IEC, bank account, 10% beneficial owners, signatory; US: EIN, W-9; EU/UK/other: registry number, IBAN, 25% owners; individuals: ID, address, PAN for India, proof of funds for LRS). It is a product matrix, not legal advice, and partners may ask for more.
+- Flow: customer fills profile, identifiers (format + checksum validated, then checked by a provider where one supports it), people, documents -> submit runs name screening + risk scoring -> staff review queue at `/admin` -> approval sets the due-diligence tier (SDD/CDD/EDD) which sets transfer limits (enforced in `lib/guardrails`). EDD needs two different approvers; sanctions or prohibited-jurisdiction hits cannot be approved.
+- Providers: `KYC_PROVIDER=mock` (dev only), `sandbox_co_in` (PAN, GSTIN, bank penny-drop; written from their public API reference, stub-tested only). Run `node scripts/kyc-smoke.mjs` with your keys to verify it live. Without a provider every identifier goes to manual staff review.
+- Documents are encrypted (AES-256-GCM) before they reach disk or S3, typed by content (PDF/PNG/JPEG, 8 MB), and every staff view is audit-logged. Aadhaar numbers are never collected.
+- Old shortcut routes `/api/admin/entities/verify` and `/api/admin/kyb/approve` still exist for sandbox use but are disabled in production unless `ALLOW_MANUAL_VERIFY_OVERRIDE=true`.
+- Not done by code: actual identity proofing (video KYC, CKYC, DigiLocker, Aadhaar eKYC) needs a licensed provider/partner; sanctions screening here still uses the M1-era local stub until M3.

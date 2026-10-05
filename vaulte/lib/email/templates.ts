@@ -211,43 +211,6 @@ export function paymentSettledEmail(opts: {
   };
 }
 
-// ── 4. KYB APPROVED ───────────────────────────────────────────────────────────
-export function kybApprovedEmail(name: string, orgName: string): EmailTemplate {
-  return {
-    subject: `✓ KYB Approved — Live payments unlocked for ${orgName}`,
-    html: wrap(`
-      <div class="badge">KYB Approved</div>
-      <h1>You're live, ${esc(name)}.</h1>
-      <p>Your business verification is complete. Live payments are now unlocked for <strong>${esc(orgName)}</strong>.</p>
-      <p>You can now process real payments via SWIFT, SEPA, ACH, UPI and all supported rails.</p>
-      <a href="${BASE_URL}/dashboard" class="btn btn-gold">Start Processing Payments →</a>
-      <table class="details">
-        <tr><td>Status</td><td>✓ Approved</td></tr>
-        <tr><td>Sanctions screening</td><td>✓ Passed</td></tr>
-        <tr><td>Live payments</td><td>✓ Unlocked</td></tr>
-      </table>
-      <div class="meta">Your risk tier is STANDARD. For volume above $5M/month, contact support for enhanced limits.</div>
-    `, `KYB approved — live payments unlocked`),
-    text: `KYB Approved for ${orgName}. Live payments are now unlocked. Open dashboard: ${BASE_URL}/dashboard`,
-  };
-}
-
-// ── 5. KYB REJECTED ───────────────────────────────────────────────────────────
-export function kybRejectedEmail(name: string, reason: string): EmailTemplate {
-  return {
-    subject: `KYB Review — Action required`,
-    html: wrap(`
-      <h1>KYB review update.</h1>
-      <p>Hi ${esc(name)}, we were unable to complete your business verification at this time.</p>
-      <p style="background:#FFF3CD;padding:12px 16px;border-left:3px solid #C9A84C;font-size:12px"><strong>Reason:</strong> ${esc(reason)}</p>
-      <p>Please review the issue and resubmit your KYB application with corrected information.</p>
-      <a href="${BASE_URL}/onboarding" class="btn">Resubmit KYB →</a>
-      <div class="meta">If you believe this is an error, reply to this email with your company registration number.</div>
-    `, `KYB review update — action required`),
-    text: `KYB review: ${reason}. Resubmit at: ${BASE_URL}/onboarding`,
-  };
-}
-
 // ── 6. PAYMENT FAILED ─────────────────────────────────────────────────────────
 export function paymentFailedEmail(opts: {
   name: string;
@@ -276,5 +239,32 @@ export function paymentFailedEmail(opts: {
       <div class="meta">If this issue persists, contact support with your Payment ID.</div>
     `, `Payment of ${amountFormatted} failed`),
     text: `Payment failed: ${amountFormatted}. Reason: ${opts.reason}. Payment ID: ${opts.paymentId}`,
+  };
+}
+
+// ── Verification (KYC/KYB) status update ─────────────────────────────────────
+export function verificationUpdateEmail(opts: {
+  name: string; subjectName: string; kind: "KYB" | "KYC";
+  status: "APPROVED" | "REJECTED" | "NEEDS_INFO"; note?: string; caseId: string;
+}): EmailTemplate {
+  const label = opts.kind === "KYB" ? "business verification" : "identity verification";
+  const head = { APPROVED: "Verification approved", REJECTED: "Verification not approved", NEEDS_INFO: "More information needed" }[opts.status];
+  const body = {
+    APPROVED: `The ${label} for <strong>${esc(opts.subjectName)}</strong> is complete. Your transaction limits depend on your verification level and are shown in your dashboard.`,
+    REJECTED: `We could not approve the ${label} for <strong>${esc(opts.subjectName)}</strong>.`,
+    NEEDS_INFO: `Our review team needs more information for the ${label} of <strong>${esc(opts.subjectName)}</strong>.`,
+  }[opts.status];
+  const url = `${BASE_URL}/dashboard/verification/${encodeURIComponent(opts.caseId)}`;
+  return {
+    subject: `${head}: ${opts.subjectName}`,
+    html: wrap(`
+      <h1>${head}.</h1>
+      <p>Hi ${esc(opts.name)},</p>
+      <p>${body}</p>
+      ${opts.note ? `<p style="background:#FFF3CD;padding:12px 16px;border-left:3px solid #C9A84C;font-size:12px"><strong>Reviewer note:</strong> ${esc(opts.note)}</p>` : ""}
+      <a href="${url}" class="btn">Open verification →</a>
+      <div class="meta">Vaulte never asks for your password, one-time codes or full card numbers by email.</div>
+    `, head),
+    text: `${head}: ${opts.subjectName}. ${opts.note ? "Note: " + opts.note + ". " : ""}Open: ${url}`,
   };
 }

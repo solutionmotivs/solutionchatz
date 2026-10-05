@@ -18,7 +18,8 @@ function check(name, cond, extra = "") {
 }
 
 // jar = { cookie: "name=value" } keeps a browser-like session per actor
-async function api(path, { method = "GET", key, body, jar, headers = {} } = {}) {
+async function api(path, { method, key, body, jar, headers = {} } = {}) {
+  method ??= body !== undefined ? "POST" : "GET";
   const h = { "Content-Type": "application/json", ...headers };
   if (key) h.Authorization = `Bearer ${key}`;
   if (jar?.cookie) h.Cookie = jar.cookie;
@@ -78,6 +79,7 @@ async function balances(transferId) {
 
 async function main() {
   await db.rateLimit.deleteMany(); // local runs share one IP; start each run with clean limits
+  await db.webhookEvent.deleteMany(); // leftovers from earlier runs would crowd the worker batch
   {
   console.log("== Identity: sign-up, email verification, sessions");
   const weak = await api("/api/auth/register", { method: "POST", body: { name: "Weak Pw", email: `weak-${uniq}@example.com`, password: "password123", company_name: "Weak Co", country: "IN", account_type: "BUSINESS", accept_terms: true } });
@@ -362,6 +364,168 @@ async function main() {
   check("verification activates the waiting transfer", v.json?.transfers_activated === 1, JSON.stringify(v.json));
   const status = await api(`/api/pay/${pubTok}/status`);
   check("public status now shows deposit instructions", status.json?.status === "AWAITING_FUNDS" && /^mock_/.test(status.json?.funding_instructions?.address ?? ""), JSON.stringify(status.json));
+
+  console.log("== KYC / KYB engine");
+  {
+  const PDF = () => new Blob([Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF " + Math.random())], { type: "application/pdf" });
+  async function upload(jar, caseId, type, personId, blob = PDF(), filename = "scan.pdf") {
+    const fd = new FormData(); fd.set("type", type); if (personId) fd.set("person_id", personId); fd.set("file", blob, filename);
+    const res = await fetch(`${BASE}/api/verification/${caseId}/documents`, { method: "POST", headers: { Cookie: jar.cookie }, body: fd });
+    return { status: res.status, json: await res.json().catch(() => null) };
+  }
+  async function fillDocs(jar, caseId) {
+    let c = (await api(`/api/verification/${caseId}`, { jar })).json;
+    for (const m of c.missing.filter(x => x.section === "document")) {
+      const spec = c.requirements.documents.find(d => d.type === m.key);
+      const targets = spec.perPerson ? c.people.filter(p => !c.documents.some(d => d.type === m.key && d.person_id === p.id)) : [null];
+      for (const p of targets) await upload(jar, caseId, m.key, p?.id ?? null);
+    }
+    return (await api(`/api/verification/${caseId}`, { jar })).json;
+  }
+  async function makeStaff(label) {
+    const em = `${label}-${uniq}@example.com`;
+    const sj = { cookie: "" };
+    await db.user.create({ data: { email: em, name: `Staff ${label}`, passwordHash: await bcrypt.hash(GOOD_PW, 10), role: "ADMIN", isStaff: true, organizationId: (await db.organization.findUnique({ where: { slug: "vaulte-staff" } })).id, emailVerifiedAt: new Date() } });
+    await api("/api/auth/login", { method: "POST", jar: sj, body: { email: em, password: GOOD_PW } });
+    const st = await api("/api/auth/2fa/setup", { method: "POST", jar: sj, body: { password: GOOD_PW } });
+    await api("/api/auth/2fa/enable", { method: "POST", jar: sj, body: { code: totp(st.json.secret) } });
+    const l1 = await api("/api/auth/login", { method: "POST", jar: sj, body: { email: em, password: GOOD_PW } });
+    await api("/api/auth/login/totp", { method: "POST", jar: sj, body: { mfa_token: l1.json.mfa_token, code: totp(st.json.secret, Date.now() + 30000) } });
+    return sj;
+  }
+
+  const K = await register("Kyc", "IN"); // separate org: approving KYB makes an org live, which would end sandbox simulation for org A
+  const reqs = await api("/api/verification/requirements?kind=KYB&country=IN&purposes=EXPORT_GOODS", { jar: K.jar });
+  check("requirements for an Indian goods exporter include IEC and GSTIN", reqs.status === 200 && ["IEC", "GSTIN", "CIN", "PAN"].every(c => reqs.json.items.some(i => i.code === c && i.required)) && reqs.json.ubo_threshold_pct === 10, JSON.stringify(reqs.json).slice(0, 200));
+  check("unknown purposes are refused", (await api("/api/verification", { method: "POST", jar: K.jar, body: { purposes: ["MONEY_LAUNDERING"] } })).status === 400);
+  const kc = await api("/api/verification", { method: "POST", jar: K.jar, body: { purposes: ["EXPORT_GOODS"] } });
+  check("a KYB case is created for the organization", kc.status === 201 && kc.json.kind === "KYB" && kc.json.status === "DRAFT", JSON.stringify(kc.json).slice(0, 200));
+  const cid = kc.json.id;
+  check("starting again resumes the same case", (await api("/api/verification", { method: "POST", jar: K.jar, body: { purposes: ["EXPORT_GOODS"] } })).json.id === cid);
+  check("another organization cannot see the case", (await api(`/api/verification/${cid}`, { jar: B.jar })).status === 404);
+  const early = await api(`/api/verification/${cid}/submit`, { method: "POST", jar: K.jar, body: {} });
+  check("submitting an incomplete case lists what is missing", early.status === 422 && early.json.error.code === "INCOMPLETE" && /PAN/.test(early.json.error.message));
+  check("a badly formatted PAN is rejected before any lookup", (await api(`/api/verification/${cid}/items/PAN`, { method: "PUT", jar: K.jar, body: { value: "ABC123" } })).status === 400);
+  check("an individual-type PAN is refused for a business", (await api(`/api/verification/${cid}/items/PAN`, { method: "PUT", jar: K.jar, body: { value: "ABCPE1234F" } })).status === 400);
+  const badGst = await api(`/api/verification/${cid}/items/GSTIN`, { method: "PUT", jar: K.jar, body: { value: "24ABKCS2033B1ZW" } });
+  check("a GSTIN with a wrong check character is refused", badGst.status === 400);
+  const failPan = await api(`/api/verification/${cid}/items/PAN`, { method: "PUT", jar: K.jar, body: { value: "ZZZCE1234F" } });
+  check("a PAN the provider cannot find is marked FAILED", failPan.json?.result?.status === "FAILED");
+  const goodPan = await api(`/api/verification/${cid}/items/PAN`, { method: "PUT", jar: K.jar, body: { value: "ABCCE1234F" } });
+  check("a valid PAN is verified by the provider", goodPan.json?.result?.status === "VERIFIED");
+  check("the full PAN is never returned, only a masked value", !JSON.stringify(goodPan.json).includes("ABCCE1234F") && goodPan.json.case.items.find(i => i.code === "PAN").masked.endsWith("234F"));
+  const dbItem = await db.verificationItem.findFirst({ where: { caseId: cid, code: "PAN" } });
+  check("the stored identifier is encrypted", !dbItem.valueEnc.includes("ABCCE1234F") && dbItem.valueEnc.startsWith("v1."));
+  await api(`/api/verification/${cid}/items/CIN`, { method: "PUT", jar: K.jar, body: { value: "U74999MH2015PTC123456" } });
+  const gst = await api(`/api/verification/${cid}/items/GSTIN`, { method: "PUT", jar: K.jar, body: { value: "24ABKCS2033B1ZV" } });
+  check("a valid GSTIN is verified", gst.json?.result?.status === "VERIFIED");
+  await api(`/api/verification/${cid}/items/IEC`, { method: "PUT", jar: K.jar, body: { value: "0388012345" } });
+  const bank = await api(`/api/verification/${cid}/items/BANK_ACCOUNT`, { method: "PUT", jar: K.jar, body: { value: "HDFC0001234|123456789012" } });
+  check("a bank account is verified", bank.json?.result?.status === "VERIFIED");
+  check("an unknown profile field is refused", (await api(`/api/verification/${cid}`, { method: "PATCH", jar: K.jar, body: { profile: { hacked: "x" } } })).status === 400);
+  const prof = await api(`/api/verification/${cid}`, { method: "PATCH", jar: K.jar, body: { profile: { legal_name: `Alpha Exports ${uniq} Pvt Ltd`, business_type: "Private limited", industry: "Textile exports", incorporation_date: "2018-04-02", address: "12 MG Road, Pune", expected_monthly_usd: 40000, source_of_funds: "BUSINESS_INCOME" } } });
+  check("profile saved", prof.status === 200 && prof.json.profile.legal_name.includes("Pvt"));
+  const ubo = await api(`/api/verification/${cid}/people`, { jar: K.jar, body: { role: "UBO", full_name: "Asha Rao", date_of_birth: "1980-05-05", nationality: "IN", country_of_residence: "IN", ownership_pct: 60, pan: "ABCPE1234F" } });
+  check("a beneficial owner can be added (PAN masked)", ubo.status === 201 && ubo.json.people[0].pan_masked.endsWith("234F"));
+  check("ownership over 100% is refused at submission", (await api(`/api/verification/${cid}/people`, { jar: K.jar, body: { role: "UBO", full_name: "Too Much", ownership_pct: 101 } })).status === 400);
+  await api(`/api/verification/${cid}/people`, { jar: K.jar, body: { role: "DIRECTOR", full_name: "Asha Rao", date_of_birth: "1980-05-05", nationality: "IN" } });
+  await api(`/api/verification/${cid}/people`, { jar: K.jar, body: { role: "SIGNATORY", full_name: "Asha Rao", date_of_birth: "1980-05-05", nationality: "IN" } });
+  const txt = await upload(K.jar, cid, "PAN_CARD", null, new Blob(["<script>alert(1)</script>"], { type: "application/pdf" }), "evil.pdf");
+  check("files are judged by content: an HTML file named .pdf is refused", txt.status === 415);
+  const big = await upload(K.jar, cid, "PAN_CARD", null, new Blob([Buffer.concat([Buffer.from("%PDF-"), Buffer.alloc(9 * 1024 * 1024)])]), "big.pdf");
+  check("files over 8 MB are refused", big.status === 413);
+  check("an unrequested document type is refused", (await upload(K.jar, cid, "W9_FORM", null)).status === 400);
+  const filled = await fillDocs(K.jar, cid);
+  check("after uploading everything required nothing is missing", filled.missing.length === 0, JSON.stringify(filled.missing));
+  const docRow = await db.verificationDocument.findFirst({ where: { caseId: cid } });
+  const raw = await (await import("node:fs/promises")).readFile(`${process.cwd()}/.data/uploads/${docRow.storageKey}`);
+  check("the stored document file is ciphertext", !raw.includes(Buffer.from("%PDF-1.4")));
+  const dl = await fetch(`${BASE}/api/verification/${cid}/documents/${docRow.id}`, { headers: { Cookie: K.jar.cookie } });
+  check("the owner can download the document back, decrypted", dl.status === 200 && (await dl.text()).startsWith("%PDF-1.4") && dl.headers.get("x-content-type-options") === "nosniff");
+  check("another organization cannot download it", (await fetch(`${BASE}/api/verification/${cid}/documents/${docRow.id}`, { headers: { Cookie: B.jar.cookie } })).status === 404);
+  const sub = await api(`/api/verification/${cid}/submit`, { method: "POST", jar: K.jar, body: {} });
+  check("a complete case goes to review with a tier", sub.status === 202 && sub.json.case.status === "IN_REVIEW" && ["SDD", "CDD"].includes(sub.json.case.tier), JSON.stringify(sub.json.result));
+  check("a case under review is locked", (await api(`/api/verification/${cid}`, { method: "PATCH", jar: K.jar, body: { profile: { industry: "Changed" } } })).status === 409);
+  check("organization KYB status follows the case", (await db.organization.findUnique({ where: { id: K.orgId } })).kybStatus === "IN_REVIEW");
+
+  const queue = await api("/api/admin/verification?status=IN_REVIEW", { jar: staffJar });
+  check("the case is in the staff queue", queue.status === 200 && queue.json.data.some(r => r.id === cid));
+  check("customers cannot open the staff queue", (await api("/api/admin/verification", { jar: K.jar })).status === 403);
+  const unrev = await api(`/api/admin/verification/${cid}/decision`, { method: "POST", jar: staffJar, body: { decision: "APPROVE" } });
+  check("approval is refused while documents are unreviewed", unrev.status === 409 && unrev.json.error.code === "DOCUMENTS_UNREVIEWED");
+  const detail = await api(`/api/admin/verification/${cid}`, { jar: staffJar });
+  for (const d of detail.json.documents) await api(`/api/admin/verification/${cid}/documents/${d.id}`, { method: "POST", jar: staffJar, body: { status: "ACCEPTED" } });
+  const view = await fetch(`${BASE}/api/admin/verification/${cid}/documents/${detail.json.documents[0].id}`, { headers: { Cookie: staffJar.cookie } });
+  check("staff can open a document (and it is audit-logged)", view.status === 200 && (await db.auditLog.count({ where: { action: "verification.document_viewed_by_staff", resourceId: cid } })) >= 1);
+  const rej = await api(`/api/admin/verification/${cid}/decision`, { method: "POST", jar: staffJar, body: { decision: "REJECT" } });
+  check("rejecting requires a note", rej.status === 400 && rej.json.error.code === "NOTE_REQUIRED");
+  const info = await api(`/api/admin/verification/${cid}/decision`, { method: "POST", jar: staffJar, body: { decision: "REQUEST_INFO", note: "Please upload a clearer address proof." } });
+  check("staff can request more information", info.status === 200 && info.json.status === "NEEDS_INFO");
+  check("the customer can edit again after a request", (await api(`/api/verification/${cid}`, { method: "PATCH", jar: K.jar, body: { profile: { industry: "Textile and garment exports" } } })).status === 200);
+  await api(`/api/verification/${cid}/submit`, { method: "POST", jar: K.jar, body: {} });
+  const detail2 = await api(`/api/admin/verification/${cid}`, { jar: staffJar });
+  for (const d of detail2.json.documents.filter(x => x.status === "UPLOADED")) await api(`/api/admin/verification/${cid}/documents/${d.id}`, { method: "POST", jar: staffJar, body: { status: "ACCEPTED" } });
+  const appr = await api(`/api/admin/verification/${cid}/decision`, { method: "POST", jar: staffJar, body: { decision: "APPROVE", note: "All documents verified." } });
+  check("staff approves", appr.status === 200 && appr.json.status === "APPROVED", JSON.stringify(appr.json));
+  const orgNow = await db.organization.findUnique({ where: { id: K.orgId } });
+  check("approval unlocks the organization and sets limits and risk tier", orgNow.kybStatus === "APPROVED" && orgNow.dailyLimitUsd > 0n && !!orgNow.riskScore !== undefined && orgNow.registrationNumber === "U74999MH2015PTC123456");
+  check("a decision email was queued/logged for the owner", (await db.emailLog.count({ where: { to: K.email, subject: { startsWith: "Verification approved" } } })) >= 1);
+
+  // Enhanced due diligence: PEP -> two different approvers
+  const eddOrg = await register("Eddie", "IN");
+  const ec = (await api("/api/verification", { method: "POST", jar: eddOrg.jar, body: { purposes: ["EXPORT_SERVICES"] } })).json.id;
+  for (const [code, value] of [["PAN", "ABCCE1234F"], ["CIN", "U74999MH2015PTC654321"], ["BANK_ACCOUNT", "HDFC0001234|555566667777"]]) await api(`/api/verification/${ec}/items/${code}`, { method: "PUT", jar: eddOrg.jar, body: { value } });
+  await api(`/api/verification/${ec}`, { method: "PATCH", jar: eddOrg.jar, body: { profile: { legal_name: `Eddie Co ${uniq}`, business_type: "LLP", industry: "Consulting", incorporation_date: "2015-01-01", address: "Delhi", expected_monthly_usd: 20000, source_of_funds: "BUSINESS_INCOME" } } });
+  for (const [role, pep] of [["UBO", true], ["DIRECTOR", false], ["SIGNATORY", false]]) await api(`/api/verification/${ec}/people`, { jar: eddOrg.jar, body: { role, full_name: "Vikram Sethi", nationality: "IN", country_of_residence: "IN", ownership_pct: role === "UBO" ? 100 : undefined, is_pep: pep, date_of_birth: "1975-01-01" } });
+  await fillDocs(eddOrg.jar, ec);
+  const es = await api(`/api/verification/${ec}/submit`, { method: "POST", jar: eddOrg.jar, body: {} });
+  check("a PEP beneficial owner forces enhanced due diligence", es.json?.case?.tier === "EDD", JSON.stringify(es.json?.result));
+  const ed = await api(`/api/admin/verification/${ec}`, { jar: staffJar });
+  for (const d of ed.json.documents) await api(`/api/admin/verification/${ec}/documents/${d.id}`, { method: "POST", jar: staffJar, body: { status: "ACCEPTED" } });
+  const a1 = await api(`/api/admin/verification/${ec}/decision`, { method: "POST", jar: staffJar, body: { decision: "APPROVE" } });
+  check("first EDD approval does not approve the case", a1.json?.status === "IN_REVIEW" && a1.json.approvals === 1, JSON.stringify(a1.json));
+  check("the same reviewer cannot approve twice", (await api(`/api/admin/verification/${ec}/decision`, { method: "POST", jar: staffJar, body: { decision: "APPROVE" } })).json?.error?.code === "ALREADY_APPROVED");
+  const staff2 = await makeStaff("second");
+  const a2 = await api(`/api/admin/verification/${ec}/decision`, { method: "POST", jar: staff2, body: { decision: "APPROVE" } });
+  check("a second, different reviewer completes the approval", a2.json?.status === "APPROVED", JSON.stringify(a2.json));
+  check("EDD limits are the highest tier", (await db.organization.findUnique({ where: { id: eddOrg.orgId } })).riskTier === "HIGH");
+
+  // Prohibited jurisdiction -> cannot be approved
+  const blkOrg = await register("Blocky", "IN");
+  const bc = (await api("/api/verification", { method: "POST", jar: blkOrg.jar, body: { purposes: ["EXPORT_SERVICES"] } })).json.id;
+  for (const [code, value] of [["PAN", "ABCCE1234F"], ["CIN", "U74999MH2015PTC777777"], ["BANK_ACCOUNT", "HDFC0001234|888899990001"]]) await api(`/api/verification/${bc}/items/${code}`, { method: "PUT", jar: blkOrg.jar, body: { value } });
+  await api(`/api/verification/${bc}`, { method: "PATCH", jar: blkOrg.jar, body: { profile: { legal_name: `Blocky Co ${uniq}`, business_type: "LLP", industry: "Consulting", incorporation_date: "2015-01-01", address: "Delhi", expected_monthly_usd: 1000, source_of_funds: "BUSINESS_INCOME" } } });
+  for (const role of ["UBO", "DIRECTOR", "SIGNATORY"]) await api(`/api/verification/${bc}/people`, { jar: blkOrg.jar, body: { role, full_name: "Reza Test", nationality: "IR", country_of_residence: "IN", ownership_pct: role === "UBO" ? 100 : undefined, date_of_birth: "1980-01-01" } });
+  await fillDocs(blkOrg.jar, bc);
+  const bs = await api(`/api/verification/${bc}/submit`, { method: "POST", jar: blkOrg.jar, body: {} });
+  check("a prohibited-jurisdiction owner is flagged as blocked in review", bs.status === 202 && bs.json.result.blocked === true, JSON.stringify(bs.json.result));
+  const bd = await api(`/api/admin/verification/${bc}`, { jar: staffJar });
+  for (const d of bd.json.documents) await api(`/api/admin/verification/${bc}/documents/${d.id}`, { method: "POST", jar: staffJar, body: { status: "ACCEPTED" } });
+  check("staff cannot approve a blocked case", (await api(`/api/admin/verification/${bc}/decision`, { method: "POST", jar: staffJar, body: { decision: "APPROVE" } })).json?.error?.code === "SCREENING_BLOCK");
+  const brj = await api(`/api/admin/verification/${bc}/decision`, { method: "POST", jar: staffJar, body: { decision: "REJECT", note: "Prohibited jurisdiction." } });
+  check("staff can reject it", brj.json?.status === "REJECTED" && (await db.organization.findUnique({ where: { id: blkOrg.orgId } })).kybStatus === "REJECTED");
+
+  // Entity-level KYC drives the transfer limits
+  const kycEnt = await entity(A.key, "Nina Individual", "US", "USD", "INDIVIDUAL");
+  const kcase = (await api("/api/verification", { method: "POST", jar: A.jar, body: { entity_id: kycEnt, purposes: ["FAMILY_MAINTENANCE"] } })).json;
+  check("an entity gets its own KYC case", kcase.kind === "KYC" && kcase.entity_id === kycEnt);
+  await api(`/api/verification/${kcase.id}`, { method: "PATCH", jar: A.jar, body: { profile: { occupation: "Nurse", address: "Austin, TX", expected_monthly_usd: 800, source_of_funds: "SALARY" } } });
+  await api(`/api/verification/${kcase.id}/people`, { jar: A.jar, body: { role: "APPLICANT", full_name: "Nina Individual", date_of_birth: "1990-03-03", nationality: "US", country_of_residence: "US", id_type: "PASSPORT" } });
+  await fillDocs(A.jar, kcase.id);
+  const ks = await api(`/api/verification/${kcase.id}/submit`, { method: "POST", jar: A.jar, body: {} });
+  check("the individual case lands at the simplified level", ks.json?.case?.tier === "SDD", JSON.stringify(ks.json?.result));
+  const kd = await api(`/api/admin/verification/${kcase.id}`, { jar: staffJar });
+  for (const d of kd.json.documents) await api(`/api/admin/verification/${kcase.id}/documents/${d.id}`, { method: "POST", jar: staffJar, body: { status: "ACCEPTED" } });
+  await api(`/api/admin/verification/${kcase.id}/decision`, { method: "POST", jar: staffJar, body: { decision: "APPROVE" } });
+  const kEntity = await db.entity.findUnique({ where: { id: kycEnt } });
+  check("approval verifies the entity", kEntity.isVerified === true && kEntity.verificationStatus === "APPROVED" && kEntity.verificationRef === kcase.id);
+  const kRecv = await entity(A.key, "Ravi Receiver", "IN", "INR", "INDIVIDUAL");
+  await verify(kRecv);
+  const small = await api("/api/quotes", { method: "POST", key: A.key, body: { kind: "PERSONAL", sender_entity_id: kycEnt, recipient_entity_id: kRecv, source_currency: "USD", dest_currency: "INR", source_amount: 90000, funding_method: "FIAT_LOCAL" } });
+  const over = await api("/api/quotes", { method: "POST", key: A.key, body: { kind: "PERSONAL", sender_entity_id: kycEnt, recipient_entity_id: kRecv, source_currency: "USD", dest_currency: "INR", source_amount: 150000, funding_method: "FIAT_LOCAL" } });
+  check("within the simplified-level limit a quote works", small.status === 201, JSON.stringify(small.json));
+  check("above the level's per-transfer limit a quote is refused", over.status === 422 && JSON.stringify(over.json).includes("TIER_TXN_LIMIT"), JSON.stringify(over.json));
+  }
 
   console.log("== Webhooks");
   const received = [];

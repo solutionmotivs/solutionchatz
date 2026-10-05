@@ -4,7 +4,7 @@ import type { NextRequest } from "next/server";
 import { verifyToken, TOKEN_COOKIE } from "@/lib/jwt";
 
 const PUBLIC_PATHS = ["/", "/login", "/register", "/forgot-password", "/accept-invite", "/api/auth/login", "/api/auth/register"];
-const API_PATHS = ["/api/payments", "/api/invoices", "/api/kyb", "/api/fx", "/api/webhooks"];
+const API_PATHS = ["/api/payments", "/api/invoices", "/api/fx", "/api/webhooks"];
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
@@ -20,7 +20,7 @@ export async function middleware(req: NextRequest) {
   }
 
   // Dashboard & other protected routes: check cookie
-  if (pathname.startsWith("/dashboard") || pathname.startsWith("/onboarding")) {
+  if (pathname.startsWith("/dashboard") || pathname.startsWith("/onboarding") || pathname.startsWith("/admin")) {
     const token = req.cookies.get(TOKEN_COOKIE)?.value;
 
     if (!token) {

@@ -90,6 +90,13 @@ export default function DashboardClient({ user, stats, recentPayments, org }: Pr
             Transfers
           </a>
           <a
+            href="/dashboard/verification"
+            className="w-full flex items-center gap-3 px-3 py-2.5 font-mono text-xs tracking-wider text-left transition-colors text-white/35 hover:text-white/60 hover:bg-white/4"
+          >
+            <span className="text-gold text-sm">✓</span>
+            Verification
+          </a>
+          <a
             href="/dashboard/profile"
             className="w-full flex items-center gap-3 px-3 py-2.5 font-mono text-xs tracking-wider text-left transition-colors text-white/35 hover:text-white/60 hover:bg-white/4"
           >
@@ -249,9 +256,9 @@ function PaymentsTab({ payments, kybApproved }: { payments: Props["recentPayment
         <div className="border border-gold/25 bg-gold/5 px-5 py-4 flex items-start gap-4">
           <span className="text-gold text-lg">⚠</span>
           <div>
-            <div className="font-display font-bold text-sm text-ink mb-1">KYB Verification Required</div>
+            <div className="font-display font-bold text-sm text-ink mb-1">Verification required</div>
             <p className="font-mono text-xs text-mist leading-relaxed">
-              Live payments are locked until your business KYB is approved. Complete verification to unlock all payment rails.
+              Live payments are locked until your verification is approved. <a href="/dashboard/verification" className="text-gold underline">Open verification</a>.
             </p>
           </div>
         </div>
