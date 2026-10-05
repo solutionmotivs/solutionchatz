@@ -65,7 +65,7 @@ export interface StablecoinPartner {
   createFiatFunding(opts: { transferId: string; currency: string; amountMinor: bigint }): Promise<FiatFundingInstruction>;
   createPayout(req: PayoutRequest): Promise<PayoutResult>;
   createVirtualAccount(req: VirtualAccountRequest): Promise<VirtualAccountResult>;
-  verifyWebhook(rawBody: string, headers: Headers): boolean;
+  verifyWebhook(rawBody: string, headers: Headers, url?: URL): boolean;
   /** Convert the partner's own webhook payload into Vaulte's event shape ({id, type, data}); null = not relevant. */
   normalizeWebhook?(payload: unknown): { id: string; type: string; data: Record<string, unknown> } | null;
 }

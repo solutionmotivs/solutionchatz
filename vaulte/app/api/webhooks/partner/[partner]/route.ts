@@ -16,7 +16,7 @@ export async function POST(req: NextRequest, { params }: { params: { partner: st
   if (raw.length > 256_000) return apiError("PAYLOAD_TOO_LARGE", "Payload too large", 413);
   let valid = false;
   try {
-    valid = partner.verifyWebhook(raw, req.headers);
+    valid = partner.verifyWebhook(raw, req.headers, req.nextUrl);
   } catch {
     valid = false;
   }
