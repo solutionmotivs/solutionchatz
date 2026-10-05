@@ -14,7 +14,7 @@ export class AirwallexFxProvider implements FxProvider {
 
   supports(src: string, dst: string) { return src !== dst && SUPPORTED.has(src) && SUPPORTED.has(dst); }
 
-  async quote(req: FxQuoteRequest): Promise<FxQuote> {
+  async quote(req: FxQuoteRequest, _mid?: { destPerSource: number; usdPerSource: number }): Promise<FxQuote> {
     const sellAmount = (req.sourceAmountMinor / 100).toFixed(2);
     const q = await this.client.createFxQuote({ sellCurrency: req.sourceCurrency, buyCurrency: req.destCurrency, sellAmount, validity: "MIN_15" });
     // Prefer the indicative amounts (buy/sell) over interpreting the pair orientation of client_rate.
