@@ -70,6 +70,9 @@ enum WebhookEventType {
   KYC_NEEDS_INFO
   DOCUMENT_RECEIVED
   DOCUMENT_VERIFIED
+  LEDGER_JOURNAL_POSTED
+  ERP_SYNC_FAILED
+  ERP_SYNC_COMPLETED
   COMPLIANCE_FLAGGED
   FX_RATE_UPDATED
   TRANSFER_CREATED
@@ -1063,4 +1066,47 @@ model Document {
   @@index([transferId])
   @@index([status])
   @@index([type])
+}
+
+// ── ERP / accounting integrations ──
+model ErpConnection {
+  id             String    @id @default(cuid())
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  organizationId String
+  /// QUICKBOOKS | ZOHO | XERO | TALLY
+  provider       String
+  /// CONNECTED | NEEDS_REAUTH | DISCONNECTED
+  status         String    @default("CONNECTED")
+  /// External company id: QuickBooks realmId, Zoho organization_id, Xero tenantId. Tally: company name.
+  tenant         String?
+  accessEnc      String?
+  refreshEnc     String?
+  expiresAt      DateTime?
+  /// Ledger/account mapping and options: bank, charges, party clearing account, base currency, create_masters...
+  mapping        Json      @default("{}")
+  /// Only transfers completed on/after this moment are synced.
+  syncFrom       DateTime  @default(now())
+  lastSyncAt     DateTime?
+  lastError      String?
+
+  @@unique([organizationId, provider])
+}
+
+model ErpSyncRecord {
+  id             String    @id @default(cuid())
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  organizationId String
+  provider       String
+  transferId     String
+  /// SYNCED | FAILED | SKIPPED
+  status         String
+  externalId     String?
+  error          String?
+  attempts       Int       @default(0)
+  syncedAt       DateTime?
+
+  @@unique([organizationId, provider, transferId])
+  @@index([status])
 }

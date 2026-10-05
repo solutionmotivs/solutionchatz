@@ -1,19 +1,14 @@
 // app/api/webhooks/route.ts
 import { NextRequest } from "next/server";
 import { db } from "@/lib/db";
-import { verifyApiKey } from "@/lib/auth";
+import { orgContext } from "@/lib/documents/api";
 import { apiError, apiSuccess } from "@/lib/utils";
 import { z } from "zod";
 import { randomBytes } from "crypto";
 import { validateWebhookUrlShape } from "@/lib/security/ssrf";
+import { EVENT_NAMES } from "@/lib/events/catalogue";
 
-const ALL_EVENTS = [
-  "payment.created","payment.settled","payment.failed","payment.cancelled",
-  "invoice.created","invoice.paid","kyb.approved","kyb.rejected",
-  "compliance.flagged","fx.rate_updated",
-  "transfer.created","transfer.funded","transfer.completed","transfer.failed",
-  "virtual_account.credited",
-];
+const ALL_EVENTS = EVENT_NAMES;
 
 const CreateWebhookSchema = z.object({
   url: z.string().url(),
@@ -25,8 +20,9 @@ const CreateWebhookSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const auth = await verifyApiKey(req.headers.get("authorization"));
-  if (!auth) return apiError("UNAUTHORIZED", "Invalid or missing API key", 401);
+  const ctx = await orgContext(req, { write: true });
+  if (ctx.response) return ctx.response;
+  const auth = { organizationId: ctx.orgId };
 
   let body: unknown;
   try { body = await req.json(); } catch {
@@ -71,8 +67,9 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  const auth = await verifyApiKey(req.headers.get("authorization"));
-  if (!auth) return apiError("UNAUTHORIZED", "Invalid or missing API key", 401);
+  const ctx = await orgContext(req);
+  if (ctx.response) return ctx.response;
+  const auth = { organizationId: ctx.orgId };
 
   const webhooks = await db.webhookEndpoint.findMany({
     where: { organizationId: auth.organizationId },

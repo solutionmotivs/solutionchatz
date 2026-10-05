@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { CHART, NORMAL_BALANCE } from "./chart";
 import { ensureLedgerGuards } from "./guards";
+import { emitWebhookEvent } from "@/lib/webhooks/dispatch";
 
 export class LedgerError extends Error {}
 
@@ -121,6 +122,15 @@ export async function postGl(tx: Prisma.TransactionClient, input: PostInput) {
   // One INSERT for all lines: the database checks the whole journal balances in that statement.
   await tx.glEntry.createMany({ data: input.lines.map(l => ({ journalId: journal.id, accountId: byCode.get(l.account)!, currency: l.currency, amountMinor: l.amountMinor, baseUsdCents: l.baseUsdCents, organizationId: l.organizationId ?? null })) });
   await tx.$executeRaw`UPDATE "GlChain" SET "lastSeq" = ${seq}, "lastHash" = ${hash} WHERE "id" = 1`;
+  // Tell the customer's accounting integrations (transactional outbox: same commit as the journal).
+  // Only the customer-facing memo lines (9xxx) are exposed: Vaulte's own revenue and receivable accounts stay internal.
+  const customerLines = input.lines.filter(l => l.account.startsWith("9"));
+  if (input.organizationId && customerLines.length) {
+    await emitWebhookEvent({
+      organizationId: input.organizationId, event: "ledger.journal.posted",
+      data: { journal_id: journal.id, seq, kind: input.kind, transfer_id: input.transferId ?? null, date: entryDate.toISOString(), lines: customerLines.map(l => ({ account: l.account, currency: l.currency, amount_minor: l.amountMinor.toString(), usd_cents: l.baseUsdCents.toString() })) },
+    }, tx);
+  }
   return journal;
 }
 

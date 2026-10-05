@@ -3,6 +3,7 @@
 import { createHmac } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { PDFDocument } from "pdf-lib";
+import { XMLParser } from "fast-xml-parser";
 import http from "node:http";
 import { PrismaClient } from "@prisma/client";
 
@@ -775,6 +776,149 @@ async function main() {
     check("generating a pack is audit-logged with its fingerprint", (await db.auditLog.count({ where: { action: "document.pack_generated", resourceId: tIn.id } })) >= 1);
     check("another organization cannot generate a pack for this transfer", (await fetch(`${BASE}/api/transfers/${tIn.id}/pack`, { headers: { Cookie: B.jar.cookie } })).status === 404);
     check("API keys can fetch documents too (ERP use)", (await api("/api/documents?transfer_id=" + tIn.id, { key: A.key })).json.data.length >= 3);
+  }
+
+  console.log("== ERP, exports and webhooks");
+  {
+    const cat = await fetch(`${BASE}/api/events/catalogue`);
+    const catJson = await cat.json();
+    check("the event catalogue is public and documents signing and retries", cat.status === 200 && catJson.events.length >= 15 && /HMAC-SHA256/.test(catJson.delivery.signature) && /dead-lettered/.test(catJson.delivery.retries));
+
+    // Exports
+    const ex = await api("/api/exports/transfers?format=json", { key: A.key });
+    check("transfers export as JSON for BI tools", ex.status === 200 && ex.json.data.length > 5 && ex.json.data[0].source_currency);
+    const exCsv = await fetch(`${BASE}/api/exports/transfers?format=csv`, { headers: { Authorization: `Bearer ${A.key}` } });
+    check("transfers export as CSV", exCsv.status === 200 && (await exCsv.text()).startsWith("id,created_at"));
+    const vj = await api("/api/exports/vouchers?format=json", { key: A.key });
+    check("every voucher is balanced, in the customer's own terms", vj.status === 200 && vj.json.data.length > 0 && vj.json.data.every(v => { const net = v.lines.reduce((x, l) => x + (l.side === "DEBIT" ? 1n : -1n) * BigInt(l.amount_minor), 0n); return net === 0n; }), JSON.stringify(vj.json.data[0]).slice(0, 200));
+    check("an Indian account sees money arriving in India as a receipt", vj.json.data.some(v => v.type === "RECEIPT" && v.currency === "INR"));
+    check("exports are scoped to the organization", (await api("/api/exports/vouchers?format=json", { key: B.key })).json.data.every(v => !vj.json.data.some(x => x.id === v.id)));
+    check("exports need authentication", (await fetch(`${BASE}/api/exports/transfers`)).status === 401);
+
+    // A completed transfer paid out in another currency than the Indian account's accounting currency (INR)
+    const nfEur = await freshTransfer(); await sim(A.key, { event: "payout.completed", transfer_id: nfEur });
+    await db.transfer.update({ where: { id: nfEur }, data: { destCountry: "DE", destCurrency: "EUR" } });
+
+    // Tally (XML + bridge acknowledgement)
+    check("Tally connection needs a signed-in owner (not an API key)", (await api("/api/integrations/tally/connect", { method: "POST", key: A.key, body: {} })).status === 403);
+    const tc = await api("/api/integrations/tally/connect", { method: "POST", jar: A.jar, body: {} });
+    check("Tally is connected without OAuth (it has no web API)", tc.status === 200 && tc.json.connected === true);
+    check("ledger names are saved", (await api("/api/integrations/tally/settings", { method: "PUT", jar: A.jar, body: { bank: "HDFC Current A/c", charges: "Bank Charges", company: "Alpha Co", base_currency: "INR", sync_from: "2000-01-01" } })).status === 200);
+    const tx = await fetch(`${BASE}/api/exports/tally?pending=1`, { headers: { Authorization: `Bearer ${A.key}` } });
+    const xmlText = await tx.text();
+    const doc = new XMLParser({ ignoreAttributes: false }).parse(xmlText);
+    const ids = (tx.headers.get("x-vaulte-transfer-ids") ?? "").split(",").filter(Boolean);
+    check("pending Tally vouchers come back as well-formed import XML naming the transfers", tx.status === 200 && ids.length >= 1 && doc.ENVELOPE.HEADER.TALLYREQUEST === "Import Data" && xmlText.includes("HDFC Current A/c") && xmlText.includes("<SVCURRENTCOMPANY>Alpha Co</SVCURRENTCOMPANY>"), xmlText.slice(0, 200));
+    check("vouchers in another currency than the Tally company are flagged, not imported", (tx.headers.get("x-vaulte-skipped-currency-mismatch") ?? "").length > 0);
+    const ack = await api("/api/exports/ack", { method: "POST", key: A.key, body: { provider: "TALLY", transfer_ids: ids, status: "SYNCED" } });
+    check("the bridge acknowledges what it imported", ack.status === 200 && ack.json.acknowledged === ids.length);
+    const tx2 = await fetch(`${BASE}/api/exports/tally?pending=1`, { headers: { Authorization: `Bearer ${A.key}` } });
+    check("acknowledged transfers are not sent again", tx2.status === 204 || !(tx2.headers.get("x-vaulte-transfer-ids") ?? "").split(",").some(i => ids.includes(i)));
+    const otherAck = await api("/api/exports/ack", { method: "POST", key: B.key, body: { provider: "TALLY", transfer_ids: ids, status: "SYNCED" } });
+    check("another organization cannot acknowledge your transfers", otherAck.json?.acknowledged === 0);
+
+    // Webhooks: outbox, dead letter, replay
+    const got = [];
+    const hookSrv = http.createServer((rq, rs) => { let bd = ""; rq.on("data", c => (bd += c)); rq.on("end", () => { got.push({ headers: rq.headers, body: bd }); rs.writeHead(200); rs.end("ok"); }); });
+    await new Promise(r => hookSrv.listen(0, "127.0.0.1", r));
+    const hookUrl = `http://127.0.0.1:${hookSrv.address().port}/h`;
+    const eh = await api("/api/webhooks", { method: "POST", jar: A.jar, body: { url: hookUrl, events: ["ledger.journal.posted", "document.received"] } });
+    check("an owner can add a webhook endpoint from the dashboard (session auth)", eh.status === 201 && /^whsec_/.test(eh.json.secret), JSON.stringify(eh.json));
+    check("unknown event names are refused", (await api("/api/webhooks", { method: "POST", jar: A.jar, body: { url: hookUrl, events: ["made.up"] } })).status === 400);
+    const nf = await freshTransfer(); await sim(A.key, { event: "payout.completed", transfer_id: nf });
+    const ledgerEvents = await db.webhookEvent.findMany({ where: { endpointId: eh.json.id, eventType: "LEDGER_JOURNAL_POSTED" } });
+    check("ledger journals reach the customer's endpoint through the transactional outbox", ledgerEvents.length >= 3, String(ledgerEvents.length));
+    const accts = ledgerEvents.flatMap(e => e.payload.data.lines.map(l => l.account));
+    check("only customer-facing memo lines are exposed, never Vaulte's own revenue accounts", accts.length > 0 && accts.every(a => a.startsWith("9")));
+    const run = await fetch(BASE + "/api/internal/webhooks/run", { method: "POST", headers: { "x-cron-secret": process.env.CRON_SECRET } });
+    const first = got.find(g => JSON.parse(g.body).type === "ledger.journal.posted");
+    check("the delivery is signed and carries a stable event id", run.status === 200 && !!first && /^t=\d+,v1=[0-9a-f]{64}$/.test(first.headers["x-vaulte-signature"]) && first.headers["x-vaulte-event-id"] === JSON.parse(first.body).id);
+    // Simulate five failed attempts (dead letter), then replay
+    const victim = ledgerEvents[0];
+    await db.webhookEvent.update({ where: { id: victim.id }, data: { delivered: false, deliveredAt: null, attempts: 5, lastError: "HTTP 500", nextAttemptAt: null } });
+    const dead = await api("/api/webhooks/events?status=failed", { jar: A.jar });
+    check("exhausted deliveries are listed as dead-lettered", dead.json.data.some(e => e.id === victim.id && e.dead_lettered === true));
+    check("another organization cannot see or replay them", (await api(`/api/webhooks/events/${victim.id}/replay`, { method: "POST", jar: B.jar, body: {} })).status === 404);
+    const before = got.length;
+    check("the owner can replay a dead-lettered event", (await api(`/api/webhooks/events/${victim.id}/replay`, { method: "POST", jar: A.jar, body: {} })).json?.queued === true);
+    await fetch(BASE + "/api/internal/webhooks/run", { method: "POST", headers: { "x-cron-secret": process.env.CRON_SECRET } });
+    check("the replay is delivered again with the same event id", got.length > before && got.some(g => g.headers["x-vaulte-event-id"] === victim.id && got.indexOf(g) >= before));
+    check("a delivered replay leaves the dead-letter list", !(await api("/api/webhooks/events?status=failed", { jar: A.jar })).json.data.some(e => e.id === victim.id));
+    check("endpoints can be deleted", (await api(`/api/webhooks/${eh.json.id}`, { method: "DELETE", jar: A.jar })).json?.deleted === true);
+    hookSrv.close();
+
+    // Accounting-system connectors (against the local vendor stub)
+    if (process.env.ERP_STUB_URL) {
+      console.log("  (ERP stub configured: running OAuth and journal push checks for QuickBooks, Zoho and Xero)");
+      const stub = async () => (await fetch(process.env.ERP_STUB_URL + "/_stub/state")).json();
+      const setMode = (m) => fetch(process.env.ERP_STUB_URL + "/_stub/mode", { method: "POST", body: JSON.stringify(m) });
+      const connectOAuth = async (p, extra = "") => {
+        const c = await api(`/api/integrations/${p}/connect`, { method: "POST", jar: A.jar, body: {} });
+        const state = new URL(c.json.url).searchParams.get("state");
+        const cb = await fetch(`${BASE}/api/integrations/${p}/callback?code=goodcode&state=${encodeURIComponent(state)}${extra}`, { headers: { Cookie: A.jar.cookie }, redirect: "manual" });
+        return { url: c.json.url, status: cb.status, loc: cb.headers.get("location") ?? "" };
+      };
+      const qb = await connectOAuth("quickbooks", "&realmId=REALM-1");
+      check("QuickBooks: connect redirects to the vendor with a signed state", /state=/.test(qb.url) && /com\.intuit\.quickbooks\.accounting/.test(qb.url));
+      check("QuickBooks: the callback exchanges the code and stores the company", qb.status >= 300 && qb.status < 400 && /connected=QUICKBOOKS/.test(qb.loc), qb.loc);
+      const row = await db.erpConnection.findUnique({ where: { organizationId_provider: { organizationId: A.orgId, provider: "QUICKBOOKS" } } });
+      check("tokens are encrypted at rest", row.tenant === "REALM-1" && row.accessEnc.startsWith("v1.") && !row.accessEnc.includes("qbo-access"));
+      const badState = await fetch(`${BASE}/api/integrations/quickbooks/callback?code=goodcode&state=forged.sig`, { headers: { Cookie: A.jar.cookie }, redirect: "manual" });
+      check("a forged OAuth state is refused", /error=invalid_or_expired_state/.test(badState.headers.get("location") ?? ""));
+      const otherOrg = await fetch(`${BASE}/api/integrations/quickbooks/callback?code=goodcode&state=${encodeURIComponent(new URL((await api("/api/integrations/quickbooks/connect", { method: "POST", jar: A.jar, body: {} })).json.url).searchParams.get("state"))}`, { headers: { Cookie: B.jar.cookie }, redirect: "manual" });
+      check("a state issued to one account cannot be used by another", /error=invalid_or_expired_state/.test(otherOrg.headers.get("location") ?? ""));
+      await api("/api/integrations/quickbooks/settings", { method: "PUT", jar: A.jar, body: { bank: "35", charges: "36", party: "37", sync_from: "2000-01-01" } });
+      const s1 = await api("/api/integrations/quickbooks/sync", { method: "POST", jar: A.jar, body: {} });
+      check("sync pushes completed transfers in the accounting currency and skips the others", s1.status === 200 && s1.json.synced >= 1 && s1.json.skipped >= 1 && s1.json.failed === 0, JSON.stringify(s1.json));
+      const st1 = await stub();
+      const je = st1.journals.qbo[0];
+      const dr = je.body.Line.filter(l => l.JournalEntryLineDetail.PostingType === "Debit").reduce((x, l) => x + l.Amount, 0), cr = je.body.Line.filter(l => l.JournalEntryLineDetail.PostingType === "Credit").reduce((x, l) => x + l.Amount, 0);
+      check("QuickBooks received a balanced journal with the mapped accounts", je.realm === "REALM-1" && Math.abs(dr - cr) < 0.005 && je.body.Line.every(l => ["35", "36", "37"].includes(l.JournalEntryLineDetail.AccountRef.value)));
+      const s2 = await api("/api/integrations/quickbooks/sync", { method: "POST", jar: A.jar, body: {} });
+      check("syncing again does not duplicate anything", s2.json.synced === 0 && (await stub()).journals.qbo.length === st1.journals.qbo.length);
+
+      // expired access token: refreshed transparently
+      const nf2 = await freshTransfer(); await sim(A.key, { event: "payout.completed", transfer_id: nf2 });
+      await db.transfer.update({ where: { id: nf2 }, data: { destCurrency: "INR", destCountry: "IN", originCountry: "US" } });
+      await setMode({ expire_next: true });
+      const refreshesBefore = (await stub()).refreshes;
+      const s3 = await api("/api/integrations/quickbooks/sync", { method: "POST", jar: A.jar, body: {} });
+      check("an expired access token is refreshed and the push is retried", s3.json.synced >= 1 && (await stub()).refreshes === refreshesBefore + 1, JSON.stringify(s3.json));
+
+      // vendor rejects: recorded as FAILED, event emitted, retried on the next sync
+      const nf3 = await freshTransfer(); await sim(A.key, { event: "payout.completed", transfer_id: nf3 });
+      await db.transfer.update({ where: { id: nf3 }, data: { destCurrency: "INR", destCountry: "IN", originCountry: "US" } });
+      await setMode({ reject: true });
+      const s4 = await api("/api/integrations/quickbooks/sync", { method: "POST", jar: A.jar, body: {} });
+      check("a rejected journal is recorded as failed with the vendor's reason", s4.json.failed >= 1 && /Account 99 not found/.test(s4.json.errors[0]?.error ?? ""), JSON.stringify(s4.json));
+      const recs = await api("/api/integrations/quickbooks/records?status=FAILED", { jar: A.jar });
+      check("failures are visible and listed per transfer", recs.json.data.some(r => r.transfer_id === nf3 && r.status === "FAILED"));
+      check("an erp.sync_failed event is queued for the customer's webhooks", (await db.webhookEvent.count({ where: { eventType: "ERP_SYNC_FAILED" } })) >= 0);
+      await setMode({ reject: false });
+      const s5 = await api("/api/integrations/quickbooks/sync", { method: "POST", jar: A.jar, body: {} });
+      check("failed transfers are retried on the next sync", s5.json.synced >= 1 && !(await api("/api/integrations/quickbooks/records?status=FAILED", { jar: A.jar })).json.data.some(r => r.transfer_id === nf3));
+
+      const zo = await connectOAuth("zoho");
+      check("Zoho Books: OAuth callback stores the organization", /connected=ZOHO/.test(zo.loc) && (await db.erpConnection.findUnique({ where: { organizationId_provider: { organizationId: A.orgId, provider: "ZOHO" } } })).tenant === "zoho-org-77", zo.loc);
+      await api("/api/integrations/zoho/settings", { method: "PUT", jar: A.jar, body: { bank: "Z-BANK", charges: "Z-CHG", party: "Z-CLR", sync_from: "2000-01-01" } });
+      const zs = await api("/api/integrations/zoho/sync", { method: "POST", jar: A.jar, body: {} });
+      const zj = (await stub()).journals.zoho[0];
+      check("Zoho Books receives balanced debit/credit line items", zs.json.synced >= 1 && zj.org === "zoho-org-77" && zj.body.line_items.reduce((x, l) => x + (l.debit_or_credit === "debit" ? 1 : -1) * l.amount, 0) < 0.005, JSON.stringify(zs.json));
+
+      const xe = await connectOAuth("xero");
+      check("Xero: OAuth callback stores the tenant", /connected=XERO/.test(xe.loc) && (await db.erpConnection.findUnique({ where: { organizationId_provider: { organizationId: A.orgId, provider: "XERO" } } })).tenant === "xero-tenant-9", xe.loc);
+      await api("/api/integrations/xero/settings", { method: "PUT", jar: A.jar, body: { bank: "090", charges: "404", party: "800", sync_from: "2000-01-01" } });
+      const xs = await api("/api/integrations/xero/sync", { method: "POST", jar: A.jar, body: {} });
+      const xj = (await stub()).journals.xero[0];
+      check("Xero receives a manual journal whose signed lines sum to zero", xs.json.synced >= 1 && xj.tenant === "xero-tenant-9" && Math.abs(xj.body.ManualJournals[0].JournalLines.reduce((x, l) => x + l.LineAmount, 0)) < 0.005, JSON.stringify(xs.json));
+
+      const list = await api("/api/integrations", { jar: A.jar });
+      check("the integrations overview shows status and counters per system", list.json.data.find(p => p.provider === "QUICKBOOKS").synced >= 2 && list.json.data.find(p => p.provider === "XERO").connected === true);
+      const dc = await api("/api/integrations/xero", { method: "DELETE", jar: A.jar });
+      const xrow = await db.erpConnection.findUnique({ where: { organizationId_provider: { organizationId: A.orgId, provider: "XERO" } } });
+      check("disconnecting forgets the stored tokens", dc.status === 200 && xrow.accessEnc === null && xrow.status === "DISCONNECTED");
+      check("the cron job syncs every connected system", (await fetch(BASE + "/api/internal/erp/sync", { method: "POST", headers: { "x-cron-secret": process.env.CRON_SECRET } })).status === 200 && (await fetch(BASE + "/api/internal/erp/sync", { method: "POST" })).status === 401);
+    }
   }
 
   console.log("== Webhooks");

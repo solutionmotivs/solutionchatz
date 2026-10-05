@@ -10,7 +10,7 @@ export const MAX_ATTEMPTS = RETRY_DELAYS_SEC.length + 1;
 
 /** "payment.settled" -> PAYMENT_SETTLED */
 export function toEventEnum(name: string): WebhookEventType {
-  return name.replace(".", "_").toUpperCase() as WebhookEventType;
+  return name.replace(/\./g, "_").toUpperCase() as WebhookEventType;
 }
 
 export function signPayload(secret: string, timestamp: number, body: string): string {
@@ -23,13 +23,15 @@ export async function emitWebhookEvent(opts: {
   event: string; // dotted, e.g. "transfer.completed"
   data: Record<string, unknown>;
   paymentId?: string;
-}): Promise<number> {
-  const endpoints = await db.webhookEndpoint.findMany({
+}, tx?: Prisma.TransactionClient): Promise<number> {
+  // Pass the caller's transaction to make this a transactional outbox: the event row commits (or rolls back) with the business change.
+  const client = tx ?? db;
+  const endpoints = await client.webhookEndpoint.findMany({
     where: { organizationId: opts.organizationId, isActive: true, events: { has: opts.event } },
   });
   if (!endpoints.length) return 0;
   const payload = { id: undefined as unknown as string, type: opts.event, created: new Date().toISOString(), data: opts.data };
-  await db.webhookEvent.createMany({
+  await client.webhookEvent.createMany({
     data: endpoints.map(e => ({
       endpointId: e.id,
       eventType: toEventEnum(opts.event),

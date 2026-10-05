@@ -35,3 +35,4 @@ Call with header `x-cron-secret: $CRON_SECRET`:
 
 ## Ledger database guards
 After `prisma migrate deploy` / `db push`, run once: `BASE_URL=... CRON_SECRET=... node scripts/db-guards.mjs`. It installs the append-only, balance and closed-period triggers. The app user must own the tables for this (or have a DBA run the same statements from `lib/ledger/guards.ts`). In production the app refuses to post journals until they exist.
+- `POST /api/internal/erp/sync` every 15 minutes (push new completed transfers to connected accounting systems).
