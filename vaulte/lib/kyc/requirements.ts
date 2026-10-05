@@ -4,6 +4,8 @@ import {
   validateBankAccount, validateCin, validateEin, validateGenericReg, validateGstin, validateIec, validateLei,
   validatePan, validateUkCompany,
 } from "./validators";
+import { bankFormat, businessPack, individualNotes } from "./countries";
+import type { RegistryCode } from "./registries/types";
 
 export type CaseKind = "KYB" | "KYC";
 
@@ -44,6 +46,8 @@ export interface ItemSpec {
   /** A provider can check this automatically (otherwise staff review it from documents). */
   autoVerifiable: boolean;
   validate: (value: string) => string | null;
+  /** Official registry that can look this identifier up (name/status/address prefill). */
+  registry?: RegistryCode;
 }
 
 export interface DocSpec {
@@ -78,7 +82,7 @@ export function uboThreshold(country: string): number {
   return 25; // EU AMLD, UK PSC, US FinCEN CDD, UAE: 25%
 }
 
-export const ID_TYPES = ["PASSPORT", "NATIONAL_ID", "DRIVING_LICENCE", "VOTER_ID", "RESIDENCE_PERMIT", "MASKED_AADHAAR"] as const;
+export const ID_TYPES = ["PASSPORT", "NATIONAL_ID", "DRIVING_LICENCE", "VOTER_ID", "RESIDENCE_PERMIT", "MASKED_AADHAAR", "EMIRATES_ID", "IQAMA", "NRIC", "CITIZENSHIP_CERT"] as const;
 
 export const SOURCE_OF_FUNDS = ["SALARY", "BUSINESS_INCOME", "SAVINGS", "INVESTMENTS", "PROPERTY_SALE", "GIFT", "INHERITANCE", "OTHER"];
 
@@ -107,13 +111,14 @@ export function requirementsFor(kind: CaseKind, country: string, purposes: strin
   const people: PersonSpec[] = [];
   const notes: string[] = [];
   const c = country.toUpperCase();
+  let entityTypes: string[] | undefined;
 
   if (kind === "KYB") {
     if (c === "IN") {
       items.push(
         { code: "PAN", label: "Company / firm PAN", help: "Permanent Account Number of the business", required: true, autoVerifiable: true, validate: v => validatePan(v, "BUSINESS") },
         { code: "CIN", label: "CIN or LLPIN", help: "MCA registration number (companies and LLPs)", required: true, autoVerifiable: false, validate: validateCin },
-        { code: "GSTIN", label: "GSTIN", help: "Mandatory for goods trade, recommended otherwise", required: has("EXPORT_GOODS") || has("IMPORT_GOODS"), autoVerifiable: true, validate: validateGstin },
+        { code: "GSTIN", label: "GSTIN", help: "Mandatory for goods trade. We fetch your registered legal name from the GST register.", required: has("EXPORT_GOODS") || has("IMPORT_GOODS"), autoVerifiable: true, validate: validateGstin, registry: "GSTIN" },
         { code: "IEC", label: "Importer-Exporter Code", help: "Required for goods exports and imports", required: has("EXPORT_GOODS") || has("IMPORT_GOODS"), autoVerifiable: false, validate: validateIec },
         { code: "BANK_ACCOUNT", label: "Business bank account (IFSC|account number)", help: "Format IFSC|account, e.g. HDFC0001234|123456789012. Used to receive INR.", required: true, autoVerifiable: true, validate: v => validateBankAccount(v, "IN") },
       );
@@ -146,19 +151,11 @@ export function requirementsFor(kind: CaseKind, country: string, purposes: strin
       );
       notes.push("FinCEN's CDD rule requires identifying each owner of 25% or more and one control person.");
     } else {
-      const uk = c === "GB";
-      items.push(
-        { code: "REG_NO", label: uk ? "Companies House number" : "Company registration number", help: "As shown on the commercial registry extract", required: true, autoVerifiable: false, validate: uk ? validateUkCompany : validateGenericReg },
-        { code: "TAX_ID", label: "Tax / VAT number", help: "VAT or national tax identifier", required: false, autoVerifiable: false, validate: validateGenericReg },
-        { code: "LEI", label: "LEI (if you have one)", help: "Legal Entity Identifier", required: false, autoVerifiable: false, validate: validateLei },
-        { code: "BANK_ACCOUNT", label: "Business bank account (IBAN)", help: "IBAN of the account used for payments", required: true, autoVerifiable: false, validate: v => validateBankAccount(v, c) },
-      );
-      documents.push(
-        { type: "REGISTRY_EXTRACT", label: "Commercial registry extract (dated within 3 months)", required: true },
-        { type: "ADDRESS_PROOF", label: "Proof of business address", required: true },
-        { type: "BANK_PROOF", label: "Bank statement showing the account holder name", required: true },
-        { type: "OWNERSHIP_STRUCTURE", label: "Ownership structure chart", required: false },
-      );
+      const pack = businessPack(c, has);
+      items.push(...pack.items);
+      documents.push(...pack.documents);
+      notes.push(...pack.notes);
+      if (pack.entityTypes) entityTypes = pack.entityTypes;
     }
     people.push(
       { role: "UBO", label: "Beneficial owners", min: 1 },
@@ -167,7 +164,7 @@ export function requirementsFor(kind: CaseKind, country: string, purposes: strin
     );
     documents.push({ type: "ID_PROOF", label: "Government ID", required: true, perPerson: true });
     if (has("IMPORT_GOODS") || has("IMPORT_SERVICES")) documents.push({ type: "SUPPLIER_CONTRACT_SAMPLE", label: "Sample supplier contract or invoice", required: false });
-    return { kind, country: c, profile: BUSINESS_PROFILE, items, documents, people, uboThresholdPct: uboThreshold(c), notes };
+    return { kind, country: c, profile: entityTypes ? BUSINESS_PROFILE.map(f => (f.key === "business_type" ? { ...f, options: entityTypes! } : f)) : BUSINESS_PROFILE, items, documents, people, uboThresholdPct: uboThreshold(c), notes };
   }
 
   // KYC (individual)
@@ -182,8 +179,9 @@ export function requirementsFor(kind: CaseKind, country: string, purposes: strin
     );
   } else {
     items.push({ code: "TAX_ID", label: "Tax identification number (if any)", help: "Do not enter government social security numbers", required: false, autoVerifiable: false, validate: validateGenericReg });
-    items.push({ code: "BANK_ACCOUNT", label: c === "US" ? "Bank account (routing|account number)" : "Bank account (IBAN)", help: "The account must be in your own name", required: false, autoVerifiable: false, validate: v => validateBankAccount(v, c) });
+    items.push({ code: "BANK_ACCOUNT", label: `Bank account (${bankFormat(c)})`, help: "The account must be in your own name", required: false, autoVerifiable: false, validate: v => validateBankAccount(v, c) });
   }
+  notes.push(...individualNotes(c));
   documents.push(
     { type: "ID_PROOF", label: "Government photo ID (passport, driving licence, national ID)", required: true, perPerson: true },
     { type: "ADDRESS_PROOF", label: "Proof of address (dated within 3 months)", required: true },

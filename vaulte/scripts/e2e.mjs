@@ -432,6 +432,16 @@ async function main() {
   await api(`/api/verification/${cid}/items/CIN`, { method: "PUT", jar: K.jar, body: { value: "U74999MH2015PTC123456" } });
   const gst = await api(`/api/verification/${cid}/items/GSTIN`, { method: "PUT", jar: K.jar, body: { value: "24ABKCS2033B1ZV" } });
   check("a valid GSTIN is verified", gst.json?.result?.status === "VERIFIED");
+  check("the GSTIN lookup returns the registered name from the register", typeof gst.json?.result?.registered_name === "string" && gst.json.result.registered_name.length > 3, JSON.stringify(gst.json).slice(0, 200));
+  const lk = await api("/api/verification/lookup?country=IN&code=GSTIN&value=24ABKCS2033B1ZV&name=Alpha%20Exports", { jar: K.jar });
+  check("lookup API returns legal name, source and status", lk.status === 200 && lk.json.status === "FOUND" && !!lk.json.legal_name && !!lk.json.source, JSON.stringify(lk.json).slice(0, 200));
+  check("lookup refuses a malformed identifier before calling any registry", (await api("/api/verification/lookup?country=IN&code=GSTIN&value=BAD", { jar: K.jar })).status === 400);
+  check("lookup says plainly when no official lookup exists", (await api("/api/verification/lookup?country=IN&code=IEC&value=0388012345", { jar: K.jar })).status === 404);
+  check("lookup needs a signed-in user", (await api("/api/verification/lookup?country=IN&code=GSTIN&value=24ABKCS2033B1ZV")).status === 401);
+  for (const [cc, code] of [["AE", "TRADE_LICENCE"], ["SA", "CR_NO"], ["MY", "REG_NO"], ["NP", "TAX_ID"], ["AU", "ABN"], ["DE", "VAT_ID"], ["GB", "REG_NO"], ["US", "EIN"]]) {
+    const r = await api(`/api/verification/requirements?kind=KYB&country=${cc}&purposes=EXPORT_SERVICES`, { jar: K.jar });
+    check(`${cc} business pack asks for ${code} and lists the official registry`, r.status === 200 && r.json.items.some(i => i.code === code) && (cc === "US" || !!r.json.registry_info?.url), JSON.stringify(r.json.registry_info));
+  }
   await api(`/api/verification/${cid}/items/IEC`, { method: "PUT", jar: K.jar, body: { value: "0388012345" } });
   const bank = await api(`/api/verification/${cid}/items/BANK_ACCOUNT`, { method: "PUT", jar: K.jar, body: { value: "HDFC0001234|123456789012" } });
   check("a bank account is verified", bank.json?.result?.status === "VERIFIED");

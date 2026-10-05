@@ -5,6 +5,7 @@ export const COUNTRIES: Array<[string, string]> = [
   ["DE", "Germany"], ["FR", "France"], ["NL", "Netherlands"], ["IE", "Ireland"], ["ES", "Spain"], ["IT", "Italy"], ["PT", "Portugal"],
   ["BE", "Belgium"], ["AT", "Austria"], ["FI", "Finland"], ["SE", "Sweden"], ["DK", "Denmark"], ["NO", "Norway"], ["CH", "Switzerland"],
   ["PL", "Poland"], ["CZ", "Czechia"], ["LU", "Luxembourg"], ["GR", "Greece"], ["EE", "Estonia"], ["LV", "Latvia"], ["LT", "Lithuania"],
+  ["BG", "Bulgaria"], ["HR", "Croatia"], ["CY", "Cyprus"], ["HU", "Hungary"], ["MT", "Malta"], ["RO", "Romania"], ["SK", "Slovakia"], ["SI", "Slovenia"],
   ["CA", "Canada"], ["AU", "Australia"], ["NZ", "New Zealand"], ["JP", "Japan"], ["KR", "South Korea"], ["HK", "Hong Kong"],
   ["MY", "Malaysia"], ["TH", "Thailand"], ["ID", "Indonesia"], ["PH", "Philippines"], ["VN", "Vietnam"], ["LK", "Sri Lanka"],
   ["BD", "Bangladesh"], ["NP", "Nepal"], ["PK", "Pakistan"], ["SA", "Saudi Arabia"], ["QA", "Qatar"], ["KW", "Kuwait"], ["BH", "Bahrain"],

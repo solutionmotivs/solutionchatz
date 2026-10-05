@@ -2,6 +2,7 @@
 import { NextRequest } from "next/server";
 import { requireUser } from "@/lib/auth-guards";
 import { apiError, apiSuccess } from "@/lib/utils";
+import { registryInfo } from "@/lib/kyc/countries";
 import { PURPOSES, requirementsFor, validPurposes, type CaseKind } from "@/lib/kyc/requirements";
 
 export async function GET(req: NextRequest) {
@@ -16,5 +17,5 @@ export async function GET(req: NextRequest) {
   const allowed = validPurposes(kind as CaseKind);
   if (purposes.some(p => !allowed.includes(p))) return apiError("VALIDATION_ERROR", "Unknown purpose", 400, "purposes");
   const r = requirementsFor(kind as CaseKind, country, purposes);
-  return apiSuccess({ purposes: PURPOSES[kind as CaseKind], profile: r.profile, items: r.items.map(({ validate: _v, ...x }) => x), documents: r.documents, people: r.people, ubo_threshold_pct: r.uboThresholdPct, notes: r.notes });
+  return apiSuccess({ purposes: PURPOSES[kind as CaseKind], profile: r.profile, items: r.items.map(({ validate: _v, ...x }) => x), documents: r.documents, people: r.people, ubo_threshold_pct: r.uboThresholdPct, notes: r.notes, registry_info: registryInfo(country) });
 }

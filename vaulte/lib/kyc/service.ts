@@ -11,6 +11,7 @@ import { getProvider, type CheckCode, type CheckResult } from "./providers";
 import { type CaseKind, type Requirements, missingForSubmission, requirementsFor, validPurposes } from "./requirements";
 import { approvalsNeeded, assessRisk, nextReviewDate, tierLimits, type Tier } from "./risk";
 import { mask, normalise } from "./validators";
+import { lookupRegistry, nameMatchScore, type RegistryRecord } from "./registries";
 
 export class KycError extends Error {
   constructor(public code: string, message: string, public status = 400, public param?: string) { super(message); }
@@ -143,6 +144,29 @@ async function runCheck(code: CheckCode, value: string, c: FullCase, nameOverrid
   return provider.verify({ code, value, country: c.country, name: sub.name, dateOfBirth: sub.dob, holder: c.kind === "KYB" ? "BUSINESS" : "INDIVIDUAL" });
 }
 
+/** Translate an official-registry answer into the item outcome. "Source down" and "name differs" go to staff, never auto-reject. */
+export function registryToCheck(code: string, r: RegistryRecord, enteredName?: string): CheckResult | null {
+  if (r.status === "UNAVAILABLE") return null;
+  const base = { provider: r.source, details: { registered_name: r.legalName, address: r.address, active: r.active, source_url: r.sourceUrl, ...r.details } as Record<string, unknown> };
+  if (r.status === "NOT_FOUND") return { ...base, status: "FAILED", reason: r.reason ?? "Not found in the official register" };
+  // An LEI that has lapsed is still a real identifier; every other registry flags inactive entities.
+  if (r.active === false && code !== "LEI") return { ...base, status: "FAILED", reason: "The official register shows this entity as not active" };
+  if (enteredName && r.legalName) {
+    const score = nameMatchScore(enteredName, r.legalName);
+    base.details.name_match_score = Math.round(score * 100) / 100;
+    if (score < 0.5) return { ...base, status: "UNAVAILABLE", reason: "Registered name differs from the name you entered; staff will review it" };
+  }
+  return { ...base, status: "VERIFIED" };
+}
+
+async function prefillFromRegistry(c: FullCase, r: RegistryRecord) {
+  const p = { ...((c.profile ?? {}) as Record<string, unknown>) };
+  let changed = false;
+  if (r.legalName && !String(p.legal_name ?? "").trim()) { p.legal_name = r.legalName; changed = true; }
+  if (r.address && !String(p.address ?? "").trim()) { p.address = r.address; changed = true; }
+  if (changed) await db.verificationCase.update({ where: { id: c.id }, data: { profile: p as Prisma.InputJsonValue } });
+}
+
 /** Store an identifier (encrypted) and, where a provider supports it, check it right away. */
 export async function setItem(c: FullCase, code: string, rawValue: string) {
   assertEditable(c);
@@ -152,7 +176,15 @@ export async function setItem(c: FullCase, code: string, rawValue: string) {
   const err = spec.validate(value);
   if (err) throw new KycError("INVALID_IDENTIFIER", err, 400, code);
 
-  const result = spec.autoVerifiable ? await runCheck(code as CheckCode, value, c) : null;
+  let registry: RegistryRecord | null = null;
+  let result: CheckResult | null = null;
+  if (spec.autoVerifiable && spec.registry) {
+    const entered = (c.profile as Record<string, unknown> | null)?.legal_name as string | undefined;
+    registry = await lookupRegistry(spec.registry, value, c.country, entered);
+    result = registryToCheck(spec.registry, registry, entered);
+  } else if (spec.autoVerifiable) {
+    result = await runCheck(code as CheckCode, value, c);
+  }
   const status = !result ? "MANUAL" : result.status === "VERIFIED" ? "VERIFIED" : result.status === "FAILED" ? "FAILED" : "MANUAL";
   const hash = hmacHex(otpPepper(), `kyc:${code}:${value}`);
   const data = {
@@ -162,8 +194,10 @@ export async function setItem(c: FullCase, code: string, rawValue: string) {
     verifiedAt: status === "VERIFIED" ? new Date() : null,
   };
   await db.verificationItem.upsert({ where: { caseId_code: { caseId: c.id, code } }, create: { caseId: c.id, code, ...data }, update: data });
+  // Registered name/address from the official source fill blanks only; the applicant's own entries are never overwritten.
+  if (registry?.status === "FOUND" && c.kind === "KYB") await prefillFromRegistry(c, registry);
   await audit(c.organizationId, undefined, "verification.item_set", c.id, { code, status });
-  return { code, status, reason: result?.reason };
+  return { code, status, reason: result?.reason, registered_name: registry?.legalName, source: registry?.source };
 }
 
 export interface PersonInput {
