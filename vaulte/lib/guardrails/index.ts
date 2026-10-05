@@ -22,6 +22,8 @@ export interface PartyCtx {
   country: string;
   /** PAN verified by the partner during KYC (needed for LRS). Vaulte does not store the PAN. */
   panVerified?: boolean;
+  /** Sanctions screening state of the party: CLEAR | REVIEW (possible match) | BLOCKED (confirmed). */
+  screening?: string;
   /** Limits from the due-diligence tier granted at KYC/KYB review (whole USD). Absent = no tier on file. */
   limits?: { perTxnUsd: number; dailyUsd: number; monthlyUsd: number };
 }
@@ -87,6 +89,10 @@ export function evaluateTransfer(ctx: GuardContext): GuardResult {
   }
   if (isHighRiskCountry(ctx.originCountry) || isHighRiskCountry(ctx.destCountry)) {
     flags.push("HIGH_RISK_COUNTRY");
+  }
+  for (const [who, p] of [["Sender", ctx.sender], ["Recipient", ctx.recipient]] as const) {
+    if (p.screening === "BLOCKED") add("SANCTIONS_BLOCKED", `${who} cannot be processed`);
+    else if (p.screening === "REVIEW") add("SANCTIONS_HOLD", `${who} is under compliance review`);
   }
   if (!ctx.sender.verified) add("SENDER_NOT_VERIFIED", "Sender must complete KYB/KYC with the partner first");
   if (!ctx.recipient.verified) add("RECIPIENT_NOT_VERIFIED", "Recipient must complete KYB/KYC with the partner first");

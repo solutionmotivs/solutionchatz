@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { getAuthUser, verifyApiKey } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/utils";
 import { z } from "zod";
+import { screenAndFlagEntity } from "@/lib/sanctions/entities";
 
 const EntitySchema = z.object({
   legalName: z.string().min(2).max(200),
@@ -43,6 +44,14 @@ export async function POST(req: NextRequest) {
       organizationId: orgId,
     },
   });
+
+  // Sanctions screening: a confirmed match is refused outright (no detail is given to the customer);
+  // a possible match is created but held until compliance staff clear it.
+  const screened = await screenAndFlagEntity(entity, "ENTITY");
+  if (screened === "BLOCK") {
+    await db.entity.delete({ where: { id: entity.id } }); // the screening record stays; the party is not stored
+    return apiError("PARTY_NOT_ACCEPTED", "We cannot onboard this party. Contact support if you believe this is a mistake.", 403);
+  }
 
   // Auto-create sandbox recipient if first entity
   if (parsed.data.isSandbox) {

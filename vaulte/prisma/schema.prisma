@@ -277,6 +277,8 @@ model Entity {
   sentPayments      Payment[]          @relation("SenderEntity")
   receivedPayments  Payment[]          @relation("RecipientEntity")
   verificationCases VerificationCase[]
+  /// CLEAR | REVIEW (possible sanctions match, transfers held) | BLOCKED (confirmed)
+  screeningStatus   String             @default("CLEAR")
 
   @@index([organizationId])
 }
@@ -862,4 +864,71 @@ model VerificationDocument {
   person   VerificationPerson? @relation(fields: [personId], references: [id], onDelete: SetNull)
 
   @@index([caseId])
+}
+
+// ── Sanctions screening (official lists mirrored locally; refreshed by the sync job) ──
+model SanctionsList {
+  code         String   @id // OFAC_SDN | UN | UK
+  version      String?
+  entryCount   Int      @default(0)
+  addressCount Int      @default(0)
+  fetchedAt    DateTime @default(now())
+  sourceUrl    String?
+  status       String   @default("OK")
+  error        String?
+}
+
+model SanctionsEntry {
+  id         String   @id @default(cuid())
+  list       String
+  externalId String
+  kind       String // INDIVIDUAL | ENTITY | VESSEL | OTHER
+  name       String
+  aliases    String[]
+  normNames  String[]
+  birthYears Int[]
+  countries  String[]
+  programs   String[]
+
+  addresses SanctionsAddress[]
+
+  @@unique([list, externalId])
+  @@index([list])
+}
+
+model SanctionsAddress {
+  id      String         @id @default(cuid())
+  list    String
+  asset   String
+  address String
+  addrKey String
+  entryId String
+  entry   SanctionsEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@index([addrKey])
+  @@index([list])
+}
+
+model ScreeningCheck {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  organizationId String?
+  subjectType    String // CASE_SUBJECT | CASE_PERSON | ENTITY | TRANSFER_PARTY | WALLET | VA_PAYER | RESCREEN
+  subjectId      String?
+  query          Json
+  result         String // CLEAR | REVIEW | BLOCK
+  topScore       Int     @default(0)
+  matches        Json
+  listVersions   Json
+
+  /// Alerts only (result != CLEAR): OPEN | CLEARED | CONFIRMED
+  status      String?
+  note        String?
+  decidedById String?
+  decidedAt   DateTime?
+
+  @@index([status, result])
+  @@index([organizationId])
+  @@index([subjectType, subjectId])
 }

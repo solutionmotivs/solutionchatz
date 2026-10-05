@@ -6,6 +6,7 @@ import { Prisma, type Entity, type Transfer } from "@prisma/client";
 import { db } from "@/lib/db";
 import { screenEntity } from "@/lib/compliance/aml";
 import { screenWallet } from "@/lib/compliance/wallet";
+import { screenAndFlagEntity } from "@/lib/sanctions/entities";
 import {
   calendarYearStart, evaluateTransfer, financialYearStart, type GuardContext, type GuardResult,
 } from "@/lib/guardrails";
@@ -69,6 +70,7 @@ function partyCtx(e: Entity) {
     entityType: (e.entityType === "INDIVIDUAL" ? "INDIVIDUAL" : "BUSINESS") as "BUSINESS" | "INDIVIDUAL",
     country: e.country,
     panVerified: e.panVerified,
+    screening: e.screeningStatus,
   };
 }
 
@@ -279,9 +281,14 @@ export async function createTransferFromQuote(orgId: string, input: CreateTransf
   const breakdown = quote.breakdown as unknown as CostBreakdown;
   const { sender, recipient } = await loadEntities(orgId, quote.senderEntityId, quote.recipientEntityId);
 
+  // Screen both parties again at transfer time (lists change daily); a hit flips their status, which the guardrails then enforce.
+  await screenAndFlagEntity(sender, "TRANSFER_PARTY");
+  await screenAndFlagEntity(recipient, "TRANSFER_PARTY");
+  const [senderNow, recipientNow] = await Promise.all([db.entity.findUniqueOrThrow({ where: { id: sender.id } }), db.entity.findUniqueOrThrow({ where: { id: recipient.id } })]);
+
   // Re-run guardrails with the real documents and the up-to-date verification state.
   const ctx = await buildGuardContext({
-    kind: quote.kind, sender, recipient, route, fundingMethod: quote.fundingMethod,
+    kind: quote.kind, sender: senderNow, recipient: recipientNow, route, fundingMethod: quote.fundingMethod,
     amountUsd: breakdown.sourceAmountUsd, inrPerUsd: breakdown.destCurrency === "INR" ? breakdown.midRateDestPerUsd : breakdown.sourceCurrency === "INR" ? breakdown.midRateSourcePerUsd : undefined,
     purposeCode: input.purposeCode, invoiceId: input.invoiceId,
   });
@@ -392,7 +399,7 @@ async function onFundsConfirmed(transferId: string, opts: { receivedMicro?: bigi
   if (t.status !== "AWAITING_FUNDS" && t.status !== "QUARANTINED") return t; // already progressed (idempotent)
 
   if (opts.fromAddress) {
-    const w = await screenWallet(opts.fromAddress);
+    const w = await screenWallet(opts.fromAddress, { organizationId: t.organizationId, subjectId: t.id });
     if (!w.cleared) return quarantine(t.id, `SANCTIONS_REVIEW: ${w.reason ?? "wallet flagged"}`, true);
   }
   if (opts.receivedMicro !== undefined && opts.depositId) {
@@ -652,7 +659,7 @@ async function onVirtualAccountCredit(partnerId: string, d: Record<string, any>)
     kind: va.entity.entityType === "INDIVIDUAL" ? "PERSONAL" : "BUSINESS", senderEntityId: payer.id, recipientEntityId: recipientId,
     sourceCurrency: currency, destCurrency: rule.destCurrency, sourceAmount: amount, fundingMethod: "VIRTUAL_ACCOUNT", prefer: "balanced",
   };
-  const sanctions = await screenEntity(payer.legalName, payer.country);
+  const sanctions = await screenEntity(payer.legalName, payer.country, { organizationId: va.organizationId, subjectType: "VA_PAYER", subjectId: payer.id, kind: payer.entityType === "INDIVIDUAL" ? "INDIVIDUAL" : "ENTITY" });
   let held: string | null = sanctions.cleared ? null : `SANCTIONS_REVIEW: payer ${payer.legalName} matched screening`;
 
   let built: BuiltQuote;

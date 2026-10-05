@@ -27,3 +27,8 @@ Real partner adapters implement `lib/psp/stablecoin/partner.ts` and register in 
 ## Checks before going live
 Legal opinion, signed partner agreements, real KYB/KYC + sanctions screening, staff accounts for admin actions, shared rate limiting,
 monitoring and backups. Not done in this repo.
+
+## Scheduled jobs
+Call with header `x-cron-secret: $CRON_SECRET`:
+- `POST /api/internal/webhooks/run` every minute (customer webhook delivery).
+- `POST /api/internal/sanctions/sync` daily, then `POST /api/internal/sanctions/rescreen` (list refresh and customer re-screening). Run the sync once before first launch: with no lists loaded, production screening sends everything to review.

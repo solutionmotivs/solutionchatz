@@ -1,7 +1,7 @@
 // KYC/KYB case orchestration: collect, verify, risk-rate, review, and apply the decision.
 import type { Prisma, VerificationCase } from "@prisma/client";
 import { db } from "@/lib/db";
-import { screenEntity } from "@/lib/compliance/aml";
+import { screenName } from "@/lib/sanctions/screen";
 import { decryptString, encryptString, hmacHex, otpPepper } from "@/lib/security/crypto";
 import { emitWebhookEvent } from "@/lib/webhooks/dispatch";
 import { sendEmail } from "@/lib/email/sender";
@@ -221,16 +221,16 @@ export async function submitCase(c: FullCase, actorId?: string) {
   }
 
   // Sanctions / PEP name screening of the subject and everyone listed.
-  const names: { name: string; country: string }[] = [];
-  if (c.kind === "KYB" && profile.legal_name) names.push({ name: profile.legal_name, country: c.country });
-  for (const p of c.people) names.push({ name: p.fullName, country: p.nationality ?? p.countryOfResidence ?? c.country });
+  const subjects: { name: string; country: string; kind: "INDIVIDUAL" | "ENTITY"; dob?: string; type: "CASE_SUBJECT" | "CASE_PERSON"; id: string }[] = [];
+  if (c.kind === "KYB" && profile.legal_name) subjects.push({ name: profile.legal_name, country: c.country, kind: "ENTITY", type: "CASE_SUBJECT", id: c.id });
+  for (const p of c.people) subjects.push({ name: p.fullName, country: p.nationality ?? p.countryOfResidence ?? c.country, kind: "INDIVIDUAL", dob: p.dateOfBirth ?? undefined, type: "CASE_PERSON", id: p.id });
   let screening: "CLEAR" | "REVIEW" | "BLOCK" = "CLEAR";
-  const hits: { name: string; match: string; lists: string[]; score: number }[] = [];
-  for (const n of names) {
-    const r = await screenEntity(n.name, n.country);
-    if (r.matchType === "CONFIRMED_MATCH") screening = "BLOCK";
-    else if (r.matchType === "POTENTIAL_MATCH" && screening !== "BLOCK") screening = "REVIEW";
-    if (r.matchType !== "NO_MATCH") hits.push({ name: n.name, match: r.matchType, lists: r.matchedLists, score: r.matchScore });
+  const hits: { name: string; match: string; lists: string[]; score: number; check_id?: string }[] = [];
+  for (const n of subjects) {
+    const r = await screenName({ name: n.name, country: n.country, kind: n.kind, dateOfBirth: n.dob }, { organizationId: c.organizationId, subjectType: n.type, subjectId: n.id });
+    if (r.outcome === "BLOCK") screening = "BLOCK";
+    else if (r.outcome === "REVIEW" && screening !== "BLOCK") screening = "REVIEW";
+    if (r.outcome !== "CLEAR") hits.push({ name: n.name, match: r.outcome === "BLOCK" ? "CONFIRMED_MATCH" : "POTENTIAL_MATCH", lists: Array.from(new Set(r.matches.map(m => m.list))), score: r.topScore, check_id: r.checkId });
   }
 
   const fresh = (await loadCase(c.id))!;

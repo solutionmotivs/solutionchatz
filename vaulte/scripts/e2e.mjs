@@ -80,6 +80,13 @@ async function balances(transferId) {
 async function main() {
   await db.rateLimit.deleteMany(); // local runs share one IP; start each run with clean limits
   await db.webhookEvent.deleteMany(); // leftovers from earlier runs would crowd the worker batch
+  // A small fixture list so sanctions behaviour is testable offline (the official lists are loaded by the sync job).
+  const FIXTURE_ADDR = "0x" + "e2ecafe".padEnd(39, "0") + "1";
+  await db.sanctionsAddress.deleteMany({ where: { list: "E2E_FIXTURE" } });
+  await db.sanctionsEntry.deleteMany({ where: { list: "E2E_FIXTURE" } });
+  const fx = await db.sanctionsEntry.create({ data: { list: "E2E_FIXTURE", externalId: "fx1", kind: "ENTITY", name: "BLOCKED TRADING COMPANY", aliases: ["BTC FZE"], normNames: [], birthYears: [], countries: ["iran"], programs: ["TEST"] } });
+  await db.sanctionsAddress.create({ data: { list: "E2E_FIXTURE", asset: "ETH", address: FIXTURE_ADDR, addrKey: FIXTURE_ADDR, entryId: fx.id } });
+  await db.sanctionsList.upsert({ where: { code: "E2E_FIXTURE" }, create: { code: "E2E_FIXTURE", version: "fx", entryCount: 1, addressCount: 1 }, update: { fetchedAt: new Date(), version: "fx" + Date.now() } });
   {
   console.log("== Identity: sign-up, email verification, sessions");
   const weak = await api("/api/auth/register", { method: "POST", body: { name: "Weak Pw", email: `weak-${uniq}@example.com`, password: "password123", company_name: "Weak Co", country: "IN", account_type: "BUSINESS", accept_terms: true } });
@@ -322,8 +329,8 @@ async function main() {
   const fW = await api("/api/quotes", { method: "POST", key: A.key, body: { kind: "BUSINESS", sender_entity_id: payer, recipient_entity_id: exporter, source_currency: "USD", dest_currency: "INR", source_amount: 200000, funding_method: "STABLECOIN" } });
   const iW = await api("/api/invoices", { method: "POST", key: A.key, body: { number: `INV-${uniq}-w`, currency: "USD", purpose_code: "P0802", line_items: [{ description: "S", quantity: 1, unit_price: 200000 }] } });
   const tW = await api("/api/stablecoin/payins", { method: "POST", key: A.key, body: { quote_id: fW.json.id, invoice_id: iW.json.id, purpose_code: "P0802" } });
-  const bad = await sim(A.key, { event: "deposit.confirmed", transfer_id: tW.json.id, from_address: "mixer-sanctioned-wallet" });
-  check("flagged sender wallet puts the transfer on hold", bad.json?.transfer_status === "QUARANTINED" && /SANCTIONS/.test(bad.json?.status_reason ?? ""), JSON.stringify(bad.json));
+  const bad = await sim(A.key, { event: "deposit.confirmed", transfer_id: tW.json.id, from_address: FIXTURE_ADDR });
+  check("a sender wallet listed by sanctions authorities puts the transfer on hold", bad.json?.transfer_status === "QUARANTINED" && /SANCTIONS/.test(bad.json?.status_reason ?? ""), JSON.stringify(bad.json));
 
   console.log("== Virtual account (collection-only, auto-sweep)");
   const nonInr = await api("/api/virtual-accounts", { method: "POST", key: A.key, body: { entity_id: exporter, country: "DE", currency: "EUR", sweep_dest_currency: "USD" } });
@@ -525,6 +532,54 @@ async function main() {
   const over = await api("/api/quotes", { method: "POST", key: A.key, body: { kind: "PERSONAL", sender_entity_id: kycEnt, recipient_entity_id: kRecv, source_currency: "USD", dest_currency: "INR", source_amount: 150000, funding_method: "FIAT_LOCAL" } });
   check("within the simplified-level limit a quote works", small.status === 201, JSON.stringify(small.json));
   check("above the level's per-transfer limit a quote is refused", over.status === 422 && JSON.stringify(over.json).includes("TIER_TXN_LIMIT"), JSON.stringify(over.json));
+  }
+
+  console.log("== Sanctions screening");
+  {
+    const mk = (name, country = "US") => api("/api/entities", { method: "POST", key: A.key, body: { legalName: name, country, currency: "USD", isSandbox: true } });
+    const exact = await mk("Blocked Trading Company Ltd");
+    check("a party that matches a listing is refused without revealing the list", exact.status === 403 && exact.json.error.code === "PARTY_NOT_ACCEPTED" && !/BLOCKED TRADING|TEST|fixture/i.test(JSON.stringify(exact.json)), JSON.stringify(exact.json));
+    check("every screening is recorded", (await db.screeningCheck.count({ where: { organizationId: A.orgId, result: "BLOCK" } })) >= 1);
+    const fuzzy = await mk("Blcked Trdng Company");
+    check("a near-match is created but flagged for review", fuzzy.status === 201 && (await db.entity.findUnique({ where: { id: fuzzy.json.id } })).screeningStatus === "REVIEW", JSON.stringify(fuzzy.json));
+    const fz = fuzzy.json.id;
+    await db.entity.update({ where: { id: fz }, data: { entityType: "BUSINESS" } });
+    await verify(fz);
+    const okRecipient = await entity(A.key, "Clean Receiver Pvt Ltd", "IN", "INR");
+    await verify(okRecipient);
+    const heldQuote = await api("/api/quotes", { method: "POST", key: A.key, body: { kind: "BUSINESS", sender_entity_id: fz, recipient_entity_id: okRecipient, source_currency: "USD", dest_currency: "INR", source_amount: 100000, funding_method: "STABLECOIN" } });
+    check("a party under review cannot be used in a quote", heldQuote.status === 422 && JSON.stringify(heldQuote.json).includes("SANCTIONS_HOLD"), JSON.stringify(heldQuote.json));
+    check("customers cannot see the staff alert queue", (await api("/api/admin/sanctions", { jar: A.jar })).status === 403);
+    const alerts = await api("/api/admin/sanctions?status=OPEN", { jar: staffJar });
+    const alert = alerts.json.data.find(a => a.subject_id === fz);
+    check("staff see the alert with the candidate match and list freshness", !!alert && alert.matches[0].listedName === "BLOCKED TRADING COMPANY" && alerts.json.lists.length >= 1, JSON.stringify(alerts.json.data.slice(0, 1)).slice(0, 300));
+    check("a disposition needs a written reason", (await api(`/api/admin/sanctions/${alert.id}`, { method: "POST", jar: staffJar, body: { decision: "CLEAR", note: "x" } })).status === 400);
+    const clr = await api(`/api/admin/sanctions/${alert.id}`, { method: "POST", jar: staffJar, body: { decision: "CLEAR", note: "Different company: registry number does not match." } });
+    check("staff can clear a false positive", clr.status === 200 && (await db.entity.findUnique({ where: { id: fz } })).screeningStatus === "CLEAR");
+    const afterQuote = await api("/api/quotes", { method: "POST", key: A.key, body: { kind: "BUSINESS", sender_entity_id: fz, recipient_entity_id: okRecipient, source_currency: "USD", dest_currency: "INR", source_amount: 100000, funding_method: "STABLECOIN" } });
+    check("after clearance the party can be used", afterQuote.status === 201, JSON.stringify(afterQuote.json));
+    const rs = await fetch(BASE + "/api/internal/sanctions/rescreen", { method: "POST", headers: { "x-cron-secret": process.env.CRON_SECRET } });
+    check("the daily rescreen does not re-raise a cleared false positive", rs.status === 200 && (await db.entity.findUnique({ where: { id: fz } })).screeningStatus === "CLEAR");
+    check("sync and rescreen jobs need the cron secret", (await fetch(BASE + "/api/internal/sanctions/sync", { method: "POST" })).status === 401 && (await fetch(BASE + "/api/internal/sanctions/rescreen", { method: "POST" })).status === 401);
+    const conf = await mk("Blcked Trdng Co.");
+    const confId = conf.json.id;
+    const a2 = (await api("/api/admin/sanctions?status=OPEN", { jar: staffJar })).json.data.find(a => a.subject_id === confId);
+    const cf = await api(`/api/admin/sanctions/${a2.id}`, { method: "POST", jar: staffJar, body: { decision: "CONFIRM", note: "Confirmed: same registered address as the listing." } });
+    const ce = await db.entity.findUnique({ where: { id: confId } });
+    check("a confirmed match blocks and unverifies the party", cf.status === 200 && ce.screeningStatus === "BLOCKED" && ce.isVerified === false);
+    const sr = await api("/api/admin/sanctions/search", { method: "POST", jar: staffJar, body: { address: FIXTURE_ADDR.toUpperCase().replace("0X", "0x") } });
+    check("staff can check a wallet address (hex addresses are case-insensitive)", sr.json?.outcome === "BLOCK", JSON.stringify(sr.json));
+    const sn = await api("/api/admin/sanctions/search", { method: "POST", jar: staffJar, body: { name: "Sunrise Textiles Private Limited", kind: "ENTITY" } });
+    check("an ordinary business is clear", sn.json?.outcome === "CLEAR");
+    if (await db.sanctionsList.findFirst({ where: { code: "OFAC_SDN", status: "OK" } })) {
+      console.log("  (official lists are loaded: running live-data checks)");
+      const live = async body => (await api("/api/admin/sanctions/search", { method: "POST", jar: staffJar, body })).json;
+      check("OFAC SDN: Bank Markazi (Central Bank of Iran) is a hard match", (await live({ name: "Central Bank of the Islamic Republic of Iran", kind: "ENTITY" })).outcome === "BLOCK");
+      check("OFAC SDN: a listed Tron address is blocked", (await live({ address: "TNiq9AXBp9EjUqhDhrwrfvAA8U3GUQZH81" })).outcome === "BLOCK");
+      check("a similar but unlisted Tron address is clear", (await live({ address: "TNiq9AXBp9EjUqhDhrwrfvAA8U3GUQZH82" })).outcome === "CLEAR");
+      const common = await Promise.all(["Tata Consultancy Services Limited", "Alpha Exports Pvt Ltd", "Sunrise Textiles Private Limited"].map(n => live({ name: n, kind: "ENTITY" })));
+      check("ordinary Indian businesses are clear against the real lists", common.every(r => r.outcome === "CLEAR"), JSON.stringify(common.map(r => r.outcome)));
+    }
   }
 
   console.log("== Webhooks");

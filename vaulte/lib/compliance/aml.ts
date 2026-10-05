@@ -1,7 +1,7 @@
 // lib/compliance/aml.ts
-// AML / Sanctions screening
-// In production: integrates with ComplyAdvantage API
-// This module defines the interface and mock for development
+// AML / sanctions screening entry points. Name screening runs against the official lists (lib/sanctions).
+
+import { screenName, type Ctx } from "@/lib/sanctions/screen";
 
 export interface SanctionsCheckResult {
   cleared: boolean;
@@ -34,82 +34,34 @@ const SANCTIONED_COUNTRIES = new Set([
   "IR", "KP", "SY", "CU",
 ]);
 
-export async function screenEntity(
-  entityName: string,
-  country: string,
-  taxId?: string
-): Promise<SanctionsCheckResult> {
-  // In production, call ComplyAdvantage:
-  // POST https://api.complyadvantage.com/searches
-  // {search_term: entityName, fuzziness: 0.6, filters: {types: ["sanction","pep"]}}
+export interface ScreenOptions {
+  kind?: "INDIVIDUAL" | "ENTITY";
+  dateOfBirth?: string;
+  organizationId?: string;
+  subjectType?: Ctx["subjectType"];
+  subjectId?: string;
+}
 
-  // --- PRODUCTION INTEGRATION PLACEHOLDER ---
-  if (process.env.COMPLYADVANTAGE_API_KEY) {
-    try {
-      const response = await fetch("https://api.complyadvantage.com/searches", {
-        method: "POST",
-        headers: {
-          "Authorization": `Token ${process.env.COMPLYADVANTAGE_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          search_term: entityName,
-          fuzziness: 0.6,
-          search_profile: "financial_services",
-          filters: {
-            types: ["sanction", "pep", "warning", "adverse-media"],
-            birth_year: null,
-          },
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const hits = data.data?.content?.data?.hits ?? [];
-        const hasConfirmedHit = hits.some((h: { doc?: { types?: string[] }; match_score?: number }) => (h.match_score ?? 0) > 0.85);
-        const hasPotentialHit = hits.some((h: { doc?: { types?: string[] }; match_score?: number }) => (h.match_score ?? 0) > 0.6);
-
-        return {
-          cleared: !hasConfirmedHit,
-          matchType: hasConfirmedHit
-            ? "CONFIRMED_MATCH"
-            : hasPotentialHit
-            ? "POTENTIAL_MATCH"
-            : "NO_MATCH",
-          matchedLists: hits.map((h: { doc?: { sources?: { name?: string }[] } }) =>
-            h.doc?.sources?.map((s: { name?: string }) => s.name).join(",") ?? ""
-          ),
-          matchScore: hits[0]?.match_score ?? 0,
-          requiresReview: hasPotentialHit || hasConfirmedHit,
-          notes: `ComplyAdvantage: ${hits.length} hits`,
-        };
-      }
-    } catch {
-      // Fall through to local check
-    }
+/**
+ * Screens a name against the mirrored OFAC SDN, UN and UK lists (see lib/sanctions).
+ * cleared = no match at all. A possible match ("POTENTIAL_MATCH") is held for staff review; a hard match is blocked.
+ */
+export async function screenEntity(entityName: string, country: string, opts: ScreenOptions = {}): Promise<SanctionsCheckResult> {
+  if (SANCTIONED_COUNTRIES.has(country)) {
+    return { cleared: false, matchType: "CONFIRMED_MATCH", matchedLists: ["COUNTRY_PROHIBITED"], matchScore: 100, requiresReview: false, notes: `Country ${country} is a prohibited jurisdiction` };
   }
-
-  // ── Fallback / Development local check ──────────────────────────────────────
-  const isSanctioned = SANCTIONED_COUNTRIES.has(country);
-
-  if (isSanctioned) {
-    return {
-      cleared: false,
-      matchType: "CONFIRMED_MATCH",
-      matchedLists: ["OFAC_SDN", "EU_CONSOLIDATED"],
-      matchScore: 100,
-      requiresReview: false,
-      notes: `Country ${country} is on the sanctions list`,
-    };
-  }
-
+  const r = await screenName(
+    { name: entityName, country, kind: opts.kind, dateOfBirth: opts.dateOfBirth },
+    { organizationId: opts.organizationId, subjectType: opts.subjectType ?? "TRANSFER_PARTY", subjectId: opts.subjectId },
+  );
+  const lists = Array.from(new Set(r.matches.filter(m => m.score >= 88).map(m => m.list)));
   return {
-    cleared: true,
-    matchType: "NO_MATCH",
-    matchedLists: [],
-    matchScore: 0,
-    requiresReview: false,
-    notes: "No matches found",
+    cleared: r.outcome === "CLEAR",
+    matchType: r.outcome === "BLOCK" ? "CONFIRMED_MATCH" : r.outcome === "REVIEW" ? "POTENTIAL_MATCH" : "NO_MATCH",
+    matchedLists: lists,
+    matchScore: r.topScore,
+    requiresReview: r.outcome === "REVIEW",
+    notes: r.note ?? (r.outcome === "CLEAR" ? "No matches found" : `${r.matches.length} candidate match(es); check ${r.checkId}`),
   };
 }
 
