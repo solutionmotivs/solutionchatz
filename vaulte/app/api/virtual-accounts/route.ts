@@ -1,6 +1,7 @@
 // Virtual accounts: local receiving details issued by a licensed partner, per customer per country.
 // Vaulte holds nothing. Every credit is swept immediately (convert + pay out); no balances are kept.
 import { NextRequest } from "next/server";
+import { log } from "@/lib/log";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
@@ -76,7 +77,7 @@ export async function POST(req: NextRequest) {
     });
     return apiSuccess(serialize(va), 201);
   } catch (e) {
-    console.error("virtual account creation failed", e);
+    log("error", "virtual account creation failed", { error: e });
     return apiError("PARTNER_ERROR", "Could not open the account with the partner", 502);
   }
 }

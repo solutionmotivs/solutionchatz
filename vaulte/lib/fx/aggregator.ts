@@ -9,12 +9,14 @@ let overrideProviders: FxProvider[] | null = null;
 export function setFxProvidersForTests(p: FxProvider[] | null) { overrideProviders = p; }
 
 /** FX_PROVIDERS = comma list of: airwallex, mock. Default: airwallex if keyed, plus mock outside production. */
-export function fxProviders(): FxProvider[] {
+export function fxProviders(sandbox = true): FxProvider[] {
   if (overrideProviders) return overrideProviders;
-  const want = (process.env.FX_PROVIDERS ?? (process.env.NODE_ENV === "production" ? "airwallex" : "airwallex,mock")).split(",").map(s => s.trim());
+  const want = (process.env.FX_PROVIDERS ?? "airwallex,mock").split(",").map(s => s.trim());
   const out: FxProvider[] = [];
-  if (want.includes("airwallex")) { const a = airwallexFxProvider(); if (a) out.push(a); }
-  if (want.includes("mock") && process.env.NODE_ENV !== "production") {
+  // Test mode never touches live money: Airwallex is used only when its environment matches the mode (sandbox keys in test mode, live keys in live mode).
+  const awxLive = process.env.AIRWALLEX_ENV === "live";
+  if (want.includes("airwallex") && sandbox !== awxLive) { const a = airwallexFxProvider(); if (a) out.push(a); }
+  if (want.includes("mock") && sandbox) {
     out.push(new MockFxDesk("mock_fx_a", 28, 0), new MockFxDesk("mock_fx_b", 19, 1.0), new MockFxDesk("mock_fx_c", 35, 0, "US"));
   }
   return out;
@@ -43,6 +45,8 @@ export interface LiveArgs {
   sourceAmountUsd: number;
   midDestPerSource: number;
   fundingMethod: string;
+  /** Test mode (default): sandbox desks and sandbox keys only. Live mode: live providers only. */
+  sandbox?: boolean;
   providers?: FxProvider[];
   timeoutMs?: number;
 }
@@ -58,7 +62,7 @@ export async function buildLiveLegs(a: LiveArgs): Promise<LiveLegs> {
   if (a.fundingMethod === "STABLECOIN") return none;
   if (a.originCountry === "IN" || a.destCountry === "IN") return none;
   if (a.sourceCurrency === a.destCurrency) return none;
-  const providers = (a.providers ?? fxProviders()).filter(p => p.supports(a.sourceCurrency, a.destCurrency));
+  const providers = (a.providers ?? fxProviders(a.sandbox ?? true)).filter(p => p.supports(a.sourceCurrency, a.destCurrency));
   if (!providers.length) return none;
 
   const settled = await Promise.allSettled(providers.map(p =>

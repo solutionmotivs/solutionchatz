@@ -1,10 +1,25 @@
-export default function Page() {
+import LegalPage, { H } from "@/components/legal/LegalPage";
+
+export const dynamic = "force-dynamic";
+
+export default function Aml() {
   return (
-    <main className="min-h-screen bg-paper px-8 py-16 font-mono">
-      <div className="max-w-2xl mx-auto">
-        <h1 className="font-serif text-4xl text-ink mb-4">AML and Sanctions Policy</h1>
-        <p className="text-xs text-slate leading-relaxed">Draft placeholder. The final text must be written or reviewed by qualified counsel for each jurisdiction served before launch.</p>
-      </div>
-    </main>
+    <LegalPage title="AML, Sanctions and Compliance Policy">
+      <p>Summary of how Vaulte and its licensed partners manage money-laundering, terrorist-financing and sanctions risk. The full internal policy, approved by the board and the compliance officer, is available to regulators and partners.</p>
+      <H>Roles</H>
+      <p>Vaulte does not hold customer funds. Licensed partners receive, convert and pay out money and carry their own regulatory obligations; Vaulte performs risk-based checks on its own platform, passes verification evidence to partners, and refuses transactions it cannot support. A designated compliance officer [NAME - TO BE APPOINTED] owns this programme.</p>
+      <H>Customer due diligence</H>
+      <p>Businesses (KYB): legal existence and registration, tax identifiers, beneficial owners above the applicable threshold (10% for companies in India; 25% elsewhere unless local law differs), directors and authorised signatory, bank account, purpose and expected volumes. Individuals (KYC): government ID, address, tax identifier where required, source of funds for higher-risk or larger remittances. Identifiers are checked against official sources through providers where available and otherwise by trained reviewers.</p>
+      <H>Risk tiers</H>
+      <p>Each customer receives a risk score and a due-diligence level: simplified, standard or enhanced. Politically exposed persons, high-risk industries and jurisdictions, large expected volumes, unclear ownership and screening matches lead to enhanced due diligence, which needs two different reviewers to approve. Transaction limits rise with the level. Customers are re-reviewed periodically (yearly for the highest risk) and on trigger events.</p>
+      <H>Sanctions and watch-list screening</H>
+      <p>Customers, owners, directors, counterparties and wallet addresses are screened against the OFAC SDN, UN consolidated and UK sanctions lists (lists refreshed daily; further lists such as the EU list are added as required). Screening is repeated on every transfer and for all customers daily. Possible matches are held for human review; confirmed matches are blocked and handled as the law requires. Transfers to or from prohibited jurisdictions are refused.</p>
+      <H>Transaction monitoring and reporting</H>
+      <p>Transactions are checked against purpose codes, invoices, limits and unusual patterns. Suspicious activity is escalated to the compliance officer, who decides on reports to the relevant financial intelligence unit and on any freezing, without tipping off the customer.</p>
+      <H>India-specific controls</H>
+      <p>Money originating in India is sent as fiat through authorised dealer channels only; recipients in India are paid in rupees through authorised channels, never in crypto. Business receipts require an invoice and a purpose code; personal remittances respect per-transaction, annual and LRS limits. Bank-issued certificates (eFIRA, FIRC, eBRC) are stored with the transaction.</p>
+      <H>Records and training</H>
+      <p>Verification and transaction records are kept for the legally required period in tamper-evident storage with access logging. Staff are trained on joining and annually.</p>
+    </LegalPage>
   );
 }

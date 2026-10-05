@@ -1,0 +1,21 @@
+[
+  {
+    "id": "awx.direct.usd-eur",
+    "partner": "airwallex",
+    "kind": "DIRECT",
+    "country": "AU",
+    "jurisdiction": "AU",
+    "srcCurrency": "USD",
+    "destCurrency": "EUR",
+    "rails": ["SEPA_INSTANT", "SWIFT"],
+    "tokens": [],
+    "chains": [],
+    "spreadBps": 20,
+    "feeBps": 0,
+    "fixedFeeUsd": 0,
+    "etaSec": 3600,
+    "minUsd": 10,
+    "maxUsd": 100000,
+    "kinds": ["BUSINESS", "PERSONAL"]
+  }
+]

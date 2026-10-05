@@ -1,0 +1,74 @@
+name: CI
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+
+defaults:
+  run:
+    working-directory: vaulte
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: vaulte }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/vaulte
+      JWT_SECRET: ci-jwt-secret-0123456789abcdef0123456789abcdef
+      OTP_PEPPER: ci-otp-pepper-0123456789abcdef0123456789
+      ENCRYPTION_KEY: ci-encryption-key-0123456789abcdef0123456789
+      CRON_SECRET: ci-cron-secret-0123456789abcdef0123456789
+      MOCK_PARTNER_WEBHOOK_SECRET: ci-mock-partner-secret-0123456789abcdef
+      AUTH_EXPOSE_DEV_OTP: "true"
+      NEXT_PUBLIC_APP_URL: http://localhost:3055
+      BASE_URL: http://localhost:3055
+      AIRWALLEX_BASE_URL: http://127.0.0.1:39911
+      AIRWALLEX_CLIENT_ID: stub
+      AIRWALLEX_API_KEY: stub
+      AIRWALLEX_WEBHOOK_SECRET: ci-airwallex-webhook-secret-0123456789
+      AIRWALLEX_STUB_URL: http://127.0.0.1:39911
+      QUICKBOOKS_CLIENT_ID: qid
+      QUICKBOOKS_CLIENT_SECRET: qsec
+      QUICKBOOKS_TOKEN_URL: http://127.0.0.1:39922/qbo/oauth/token
+      QUICKBOOKS_API_BASE: http://127.0.0.1:39922/qbo
+      ZOHO_CLIENT_ID: zid
+      ZOHO_CLIENT_SECRET: zsec
+      ZOHO_ACCOUNTS_URL: http://127.0.0.1:39922/zoho
+      ZOHO_API_BASE: http://127.0.0.1:39922/zoho
+      XERO_CLIENT_ID: xid
+      XERO_CLIENT_SECRET: xsec
+      XERO_IDENTITY_URL: http://127.0.0.1:39922/xero
+      XERO_API_BASE: http://127.0.0.1:39922/xero
+      ERP_STUB_URL: http://127.0.0.1:39922
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: vaulte/package-lock.json }
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx prisma db push --skip-generate
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Unit tests
+        run: npx vitest run
+      - name: Production build
+        run: npx next build
+      - name: Dependency audit (fails on high+ except the documented Next 14 advisories)
+        run: node scripts/audit-gate.mjs
+      - name: End-to-end (dev server, vendor stubs)
+        run: |
+          node scripts/airwallex-stub.mjs & node scripts/erp-stub.mjs &
+          npx next dev -p 3055 > /tmp/next.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://localhost:3055/api/health && break; sleep 2; done
+          node scripts/e2e.mjs
+      - name: Upload server log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with: { name: next-log, path: /tmp/next.log }

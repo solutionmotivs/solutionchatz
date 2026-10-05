@@ -1,5 +1,6 @@
 // GET — the vendor redirects the user's browser here after consent. Exchanges the code for tokens (stored encrypted).
 import { NextRequest, NextResponse } from "next/server";
+import { log } from "@/lib/log";
 import { db } from "@/lib/db";
 import { getAuthUser } from "@/lib/auth";
 import { ADAPTERS } from "@/lib/erp/connectors";
@@ -22,7 +23,7 @@ export async function GET(req: NextRequest, { params }: { params: { provider: st
     await db.auditLog.create({ data: { organizationId: user.organizationId, userId: user.id, action: "erp.connected", resourceType: "ErpConnection", resourceId: p } });
     return back(`connected=${p}`);
   } catch (e) {
-    console.error("erp connect failed", p, e instanceof Error ? e.message : e);
+    log("error", "erp connect failed", { provider: p, error: e });
     return back("error=connection_failed");
   }
 }

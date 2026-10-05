@@ -210,3 +210,28 @@ describe("rails", () => {
     expect(RAILS.FEDNOW.alwaysOn).toBe(true);
   });
 });
+
+import { assertRouteMode } from "../lib/stablecoin/service";
+import { parseCatalog } from "../lib/routing/partners-config";
+import { fxProviders } from "../lib/fx/aggregator";
+
+describe("test mode and live mode never mix", () => {
+  const mockRoute = { legs: [{ partner: "mock_us" }] } as unknown as Route;
+  const realRoute = { legs: [{ partner: "airwallex" }] } as unknown as Route;
+  it("a mock partner cannot carry a live transfer", () => {
+    expect(() => assertRouteMode(mockRoute, false)).toThrow(/test mode/);
+    expect(() => assertRouteMode(mockRoute, true)).not.toThrow();
+    expect(() => assertRouteMode(realRoute, false)).not.toThrow();
+  });
+  it("the live catalogue rejects mock partners, bad numbers and duplicate ids", () => {
+    const leg = { id: "awx.direct.usdeur", partner: "airwallex", kind: "DIRECT", country: "AU", jurisdiction: "AU", srcCurrency: "USD", destCurrency: "EUR", rails: ["SWIFT"], tokens: [], chains: [], spreadBps: 20, feeBps: 0, fixedFeeUsd: 5, etaSec: 86400, minUsd: 10, maxUsd: 100000, kinds: ["BUSINESS"] };
+    expect(parseCatalog(JSON.stringify([leg]))).toHaveLength(1);
+    expect(() => parseCatalog(JSON.stringify([{ ...leg, partner: "mock_us" }]))).toThrow(/mock/);
+    expect(() => parseCatalog(JSON.stringify([{ ...leg, spreadBps: 5000 }]))).toThrow();
+    expect(() => parseCatalog(JSON.stringify([leg, leg]))).toThrow(/duplicate/);
+  });
+  it("sandbox desks exist only in test mode; Airwallex follows its own environment", () => {
+    expect(fxProviders(true).some(p => p.id.startsWith("mock_"))).toBe(true);
+    expect(fxProviders(false).some(p => p.id.startsWith("mock_"))).toBe(false);
+  });
+});

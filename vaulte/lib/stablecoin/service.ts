@@ -2,6 +2,7 @@
 // Vaulte never custodies funds: partners receive money, convert, and pay out. This service
 // picks routes, enforces guardrails, keeps the memo ledger, and reacts to partner events.
 import { tierLimits } from "@/lib/kyc/risk";
+import { log } from "@/lib/log";
 import { Prisma, type Entity, type Transfer } from "@prisma/client";
 import { db } from "@/lib/db";
 import { screenEntity } from "@/lib/compliance/aml";
@@ -14,6 +15,7 @@ import {
 import { buildBreakdown, fromUsd, markupBpsFor, toUsd, validateMargin } from "@/lib/pricing";
 import { buildLiveLegs, summariseFx, type LiveLegs } from "@/lib/fx/aggregator";
 import { MOCK_LEGS } from "@/lib/routing/catalog";
+import { realLegs } from "@/lib/routing/partners-config";
 import { findRoutes, nextRoute, pickAlternates, rankRoutes, routeCostUsd } from "@/lib/routing/engine";
 import { bookFailureReversal, bookFundsReceived, bookPayout, finFromTransfer, rebookRevenue } from "@/lib/ledger/transfers";
 import { getPartner } from "@/lib/psp/stablecoin/registry";
@@ -63,6 +65,13 @@ async function loadEntities(orgId: string, senderId: string, recipientId: string
   if (!sender) throw new ServiceError("NOT_FOUND", "Sender entity not found", 404);
   if (!recipient) throw new ServiceError("NOT_FOUND", "Recipient entity not found", 404);
   return { sender, recipient };
+}
+
+/** Mock partners can only ever carry test-mode transfers. */
+export function assertRouteMode(route: Route, sandbox: boolean) {
+  if (!sandbox && route.legs.some(l => l.partner.startsWith("mock_"))) {
+    throw new ServiceError("QUOTE_MODE_MISMATCH", "This quote was issued in test mode. Request a new quote for a live transfer.", 409);
+  }
 }
 
 function partyCtx(e: Entity) {
@@ -171,8 +180,13 @@ export async function evaluateQuote(orgId: string, input: QuoteInput, opts: { ig
   const sourceAmountUsd = toUsd(input.sourceAmount, input.sourceCurrency, rates);
   const prefer = input.prefer ?? "balanced";
 
+  // Test mode and live mode never mix: unverified accounts get the mock catalogue and sandbox providers only; approved accounts get
+  // only the contracted partner catalogue (PARTNER_CATALOG_JSON) and live providers. No mock partner can ever carry live money.
+  const orgRow = await db.organization.findUnique({ where: { id: orgId }, select: { kybStatus: true } });
+  const sandbox = orgRow?.kybStatus !== "APPROVED";
+  const baseLegs = sandbox ? MOCK_LEGS : realLegs();
   // Live-priced FX providers (Airwallex, sandbox desks): each returns a firm rate that becomes a routable leg.
-  const live = await buildLiveLegs({
+  const live = await buildLiveLegs({ sandbox,
     kind: input.kind, originCountry: sender.country, destCountry: recipient.country, sourceCurrency: input.sourceCurrency, destCurrency: input.destCurrency,
     sourceAmountMinor: input.sourceAmount, sourceAmountUsd, midDestPerSource: rates[input.destCurrency] / rates[input.sourceCurrency], fundingMethod: input.fundingMethod,
   }).catch(() => ({ legs: [], quotes: [], errors: [{ provider: "fx", error: "aggregator failed" }] }) as LiveLegs);
@@ -180,7 +194,7 @@ export async function evaluateQuote(orgId: string, input: QuoteInput, opts: { ig
     kind: input.kind, originCountry: sender.country, destCountry: recipient.country,
     sourceCurrency: input.sourceCurrency, destCurrency: input.destCurrency, amountUsd: sourceAmountUsd,
     fundingMethod: input.fundingMethod, token: input.token,
-  }, { legs: [...MOCK_LEGS, ...live.legs] });
+  }, { legs: [...baseLegs, ...live.legs] });
   if (!all.length) {
     throw new ServiceError("NO_ROUTE", "No compliant route is available for this corridor, amount and type", 422);
   }
@@ -289,6 +303,11 @@ export async function createTransferFromQuote(orgId: string, input: CreateTransf
   const breakdown = quote.breakdown as unknown as CostBreakdown;
   const { sender, recipient } = await loadEntities(orgId, quote.senderEntityId, quote.recipientEntityId);
 
+  // Mode is decided by the account's verification, never by the caller. A quote issued in test mode cannot become a live transfer.
+  const orgNow = await db.organization.findUnique({ where: { id: orgId }, select: { kybStatus: true } });
+  const sandboxNow = orgNow?.kybStatus !== "APPROVED";
+  assertRouteMode(route, sandboxNow);
+
   // Screen both parties again at transfer time (lists change daily); a hit flips their status, which the guardrails then enforce.
   await screenAndFlagEntity(sender, "TRANSFER_PARTY");
   await screenAndFlagEntity(recipient, "TRANSFER_PARTY");
@@ -317,7 +336,7 @@ export async function createTransferFromQuote(orgId: string, input: CreateTransf
       status: needsVerification ? "PENDING_VERIFICATION" : "AWAITING_FUNDS",
       statusReason: needsVerification ? guard.violations.map(v => v.code).join(",") : null,
       fundingMethod: quote.fundingMethod,
-      isSandbox: input.isSandbox ?? true,
+      isSandbox: sandboxNow,
       originCountry: quote.originCountry, destCountry: quote.destCountry,
       sourceCurrency: quote.sourceCurrency, destCurrency: quote.destCurrency,
       sourceAmount: quote.sourceAmount, destAmount: quote.destAmount,
@@ -344,6 +363,7 @@ export async function issueFunding(transferId: string): Promise<Transfer> {
   const t = await db.transfer.findUniqueOrThrow({ where: { id: transferId } });
   if (t.fundingMethod === "VIRTUAL_ACCOUNT") return t;
   const route = t.route as unknown as Route;
+  assertRouteMode(route, t.isSandbox);
   const partner = getPartner(route.legs[0].partner);
   let instructions: Record<string, unknown>;
   if (t.fundingMethod === "STABLECOIN") {
@@ -440,6 +460,7 @@ export async function dispatchPayout(transferId: string): Promise<Transfer> {
   const route = t.route as unknown as Route;
   const leg = lastLeg(route);
   try {
+    assertRouteMode(route, t.isSandbox);
     const invoice = t.invoiceId ? await db.invoice.findUnique({ where: { id: t.invoiceId }, select: { number: true } }) : null;
     const bank = await db.bankAccount.findFirst({ where: { entityId: t.recipientEntityId, currency: t.destCurrency }, orderBy: [{ isVerified: "desc" }, { createdAt: "desc" }] });
     const res = await getPartner(leg.partner).createPayout({
@@ -510,7 +531,7 @@ async function onPayoutCompleted(transferId: string, efiraRef?: string | null): 
     }
     return tx.transfer.update({ where: { id: t.id }, data: { status: "COMPLETED", completedAt: new Date(), efiraRef: efiraRef ?? t.efiraRef, statusReason: null } });
   });
-  await recordEfiraReference(done, done.efiraRef).catch(e => console.error("efira record failed", e));
+  await recordEfiraReference(done, done.efiraRef).catch(e => log("error", "efira record failed", { error: e }));
   await emitWebhookEvent({ organizationId: t.organizationId, event: "transfer.completed", data: { transfer_id: t.id, efira_ref: done.efiraRef } });
   if (t.invoiceId) await emitWebhookEvent({ organizationId: t.organizationId, event: "invoice.paid", data: { invoice_id: t.invoiceId, transfer_id: t.id } });
   return done;

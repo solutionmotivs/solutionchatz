@@ -1,6 +1,7 @@
 // Shared helpers for verification routes.
 import type { NextRequest } from "next/server";
 import type { ZodTypeAny, z } from "zod";
+import { log } from "@/lib/log";
 import { requireUser } from "@/lib/auth-guards";
 import { apiError } from "@/lib/utils";
 import type { AuthUser } from "@/types";
@@ -11,7 +12,7 @@ export const EDIT_ROLES = ["OWNER", "ADMIN"] as const;
 
 export function handleError(e: unknown): Response {
   if (e instanceof KycError) return apiError(e.code, e.message, e.status, e.param);
-  console.error("verification error", e);
+  log("error", "verification error", { error: e });
   return apiError("INTERNAL_ERROR", "Something went wrong", 500);
 }
 

@@ -6,8 +6,34 @@ import { verifyToken, TOKEN_COOKIE } from "@/lib/jwt";
 const PUBLIC_PATHS = ["/", "/login", "/register", "/forgot-password", "/accept-invite", "/api/auth/login", "/api/auth/register"];
 const API_PATHS = ["/api/payments", "/api/invoices", "/api/fx", "/api/webhooks"];
 
+/** Cookie-authenticated, state-changing API calls must come from our own origin (defence in depth: handlers also check). */
+function crossSiteMutation(req: NextRequest): boolean {
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return false;
+  if (!req.nextUrl.pathname.startsWith("/api/")) return false;
+  if (!req.cookies.get(TOKEN_COOKIE) || req.headers.get("authorization")) return false; // API-key / bearer calls are not ambient-credential requests
+  const origin = req.headers.get("origin");
+  if (!origin) return false; // non-browser clients send no Origin
+  try {
+    const allowed = new Set<string>([req.nextUrl.host]);
+    const host = req.headers.get("host"); if (host) allowed.add(host);
+    if (process.env.NEXT_PUBLIC_APP_URL) allowed.add(new URL(process.env.NEXT_PUBLIC_APP_URL).host);
+    return !allowed.has(new URL(origin).host);
+  } catch { return true; }
+}
+
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
+  const requestId = req.headers.get("x-request-id") ?? crypto.randomUUID();
+
+  if (crossSiteMutation(req)) {
+    return NextResponse.json({ error: { code: "CSRF_BLOCKED", message: "Cross-site request blocked" } }, { status: 403, headers: { "x-request-id": requestId } });
+  }
+  const res = await handle(req, pathname);
+  res.headers.set("x-request-id", requestId);
+  return res;
+}
+
+async function handle(req: NextRequest, pathname: string): Promise<NextResponse> {
 
   // Allow public paths
   if (PUBLIC_PATHS.some(p => pathname === p || pathname.startsWith(p + "?"))) {

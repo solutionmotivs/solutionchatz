@@ -1,5 +1,6 @@
 // POST /api/webhooks/partner/:partner — events from licensed partners (deposits, payouts, account credits).
 import { NextRequest } from "next/server";
+import { log } from "@/lib/log";
 import { z } from "zod";
 import { apiError, apiSuccess } from "@/lib/utils";
 import { getPartnerForWebhook } from "@/lib/psp/stablecoin/registry";
@@ -32,7 +33,7 @@ export async function POST(req: NextRequest, { params }: { params: { partner: st
     return apiSuccess({ status: result });
   } catch (e) {
     if (e instanceof ServiceError) return handleServiceError(e);
-    console.error("partner event failed", e);
+    log("error", "partner event failed", { partner: params.partner, error: e });
     return apiError("PROCESSING_ERROR", "Event could not be processed; please retry", 500);
   }
 }

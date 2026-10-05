@@ -1,4 +1,5 @@
 import { apiError } from "@/lib/utils";
+import { log } from "@/lib/log";
 import { ServiceError } from "@/lib/stablecoin/service";
 
 /** Maps service-layer errors to the API error envelope (with guardrail details when present). */
@@ -14,7 +15,7 @@ export function handleServiceError(e: unknown): Response {
     };
     return Response.json(body, { status: e.status });
   }
-  console.error("Unhandled error:", e);
+  log("error", "unhandled error", { error: e });
   return apiError("INTERNAL_ERROR", "Something went wrong", 500);
 }
 

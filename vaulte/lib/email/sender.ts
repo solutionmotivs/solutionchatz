@@ -3,6 +3,7 @@
 // Falls back to console.log in dev if RESEND_API_KEY not set
 
 import type { EmailTemplate } from "./templates";
+import { log } from "@/lib/log";
 import { db } from "@/lib/db";
 
 const FROM = process.env.EMAIL_FROM ?? "Vaulte <noreply@vaulte.io>";
@@ -16,7 +17,7 @@ export async function sendEmail(opts: {
 
   // Without a provider key: never pretend to deliver in production (OTP emails would be lost or leaked in logs).
   if (!process.env.RESEND_API_KEY && process.env.NODE_ENV === "production") {
-    console.error("RESEND_API_KEY is not set: email not sent");
+    log("error", "RESEND_API_KEY is not set: email not sent");
     await db.emailLog.create({
       data: { to, subject: template.subject, template: "unknown", status: "failed", organizationId: organizationId ?? null },
     }).catch(() => {});
@@ -57,7 +58,7 @@ export async function sendEmail(opts: {
     const data = await res.json() as { id?: string; error?: { message: string } };
 
     if (!res.ok) {
-      console.error("Resend error:", data.error?.message);
+      log("error", "email provider error", { error: data.error?.message });
       await db.emailLog.create({
         data: { to, subject: template.subject, template: "unknown", status: "failed", organizationId: organizationId ?? null },
       }).catch(() => {});
@@ -70,7 +71,7 @@ export async function sendEmail(opts: {
 
     return { success: true, id: data.id };
   } catch (err) {
-    console.error("Email send error:", err);
+    log("error", "email send error", { error: err });
     return { success: false };
   }
 }

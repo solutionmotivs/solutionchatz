@@ -921,6 +921,32 @@ async function main() {
     }
   }
 
+  console.log("== Launch hardening");
+  {
+    check("liveness endpoint answers", (await (await fetch(`${BASE}/api/health`)).json()).status === "ok");
+    const rd = await fetch(`${BASE}/api/health/ready`); const rj = await rd.json();
+    check("readiness reports checks without leaking details of healthy ones", [200, 503].includes(rd.status) && rj.checks.some(c => c.name === "database" && c.ok === true) && !JSON.stringify(rj).includes("postgresql://"));
+    check("every response carries a request id", !!(await fetch(`${BASE}/api/health`)).headers.get("x-request-id"));
+    const cross = await fetch(`${BASE}/api/entities`, { method: "POST", headers: { Origin: "https://evil.example", Cookie: "vaulte_session=x", "Content-Type": "application/json" }, body: "{}" });
+    check("a cross-site request carrying a session cookie is blocked for every API route", cross.status === 403 && (await cross.json()).error.code === "CSRF_BLOCKED");
+    check("API-key calls are not affected by the origin guard", (await api("/api/fx/rates", { key: A.key, headers: { Origin: "https://partner-app.example" } })).status === 200);
+    const hdrs = (await fetch(`${BASE}/`)).headers;
+    check("security headers are present", /frame-ancestors 'none'/.test(hdrs.get("content-security-policy") ?? "") && hdrs.get("x-content-type-options") === "nosniff" && hdrs.get("x-frame-options") === "DENY" && /max-age/.test(hdrs.get("strict-transport-security") ?? ""));
+    // A verified (live-mode) account never gets mock partners: with no contracted catalogue there is simply no route.
+    const live = await register("Livemode", "US");
+    await db.organization.update({ where: { id: live.orgId }, data: { kybStatus: "APPROVED" } });
+    const lp = await entity(live.key, "Live Payer LLC", "US", "USD"); const lr = await entity(live.key, "Live Receiver GmbH", "DE", "EUR");
+    await verify(lp); await verify(lr);
+    const lq = await api("/api/quotes", { method: "POST", key: live.key, body: { kind: "BUSINESS", sender_entity_id: lp, recipient_entity_id: lr, source_currency: "USD", dest_currency: "EUR", source_amount: 100000, funding_method: "FIAT_LOCAL" } });
+    check("live mode has no route until a real partner catalogue is configured (mock partners never carry live money)", lq.status === 422 && lq.json.error.code === "NO_ROUTE", JSON.stringify(lq.json).slice(0, 200));
+    const tq = await api("/api/quotes", { method: "POST", key: A.key, body: { kind: "BUSINESS", sender_entity_id: lp, recipient_entity_id: lr, source_currency: "USD", dest_currency: "EUR", source_amount: 100000, funding_method: "FIAT_LOCAL" } });
+    check("another account in test mode still quotes normally", tq.status === 404 || tq.status === 201);
+    for (const path of ["/legal/terms", "/legal/privacy", "/legal/aml", "/legal/grievance", "/legal/security"]) {
+      const r = await fetch(BASE + path); const t = await r.text();
+      check(`${path} is served and marked as a draft until counsel approves`, r.status === 200 && /DRAFT FOR LEGAL REVIEW/.test(t));
+    }
+  }
+
   console.log("== Webhooks");
   const received = [];
   const server = http.createServer((req, res) => {
