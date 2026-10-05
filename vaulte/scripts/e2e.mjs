@@ -83,6 +83,7 @@ async function balances(transferId) {
 async function main() {
   await db.rateLimit.deleteMany(); // local runs share one IP; start each run with clean limits
   await db.webhookEvent.deleteMany(); // leftovers from earlier runs would crowd the worker batch
+  await db.screeningCheck.deleteMany(); // earlier runs leave open alerts that would push this run's alert off the first page of the queue
   // Test database only: the ledger is append-only by design, so a fresh e2e run empties it with TRUNCATE (which the row triggers do not intercept).
   await db.$executeRawUnsafe('TRUNCATE "GlEntry","GlJournal","GlPeriod","GlChain" CASCADE');
   await db.reconLine.deleteMany(); await db.reconBatch.deleteMany();
@@ -274,6 +275,68 @@ async function main() {
   check("ledger: markup recorded as revenue (4000) and due from partner (1100)", (bal["4000"] ?? 0n) < 0n && (bal["1100"] ?? 0n) === -(bal["4000"] ?? 0n));
   check("ledger: transfer journals sum to zero", Object.values(bal).reduce((a, b) => a + b, 0n) === 0n);
   check("invoice marked paid", (await db.invoice.findUnique({ where: { id: inv.json.id } })).status === "PAID");
+
+  console.log("== Invoices, proforma, payment links, hosted checkout");
+  const yr = new Date().getUTCFullYear();
+  const i1 = await api("/api/invoices", { method: "POST", key: A.key, body: { currency: "USD", issuer_entity_id: exporter, payer_name: "Globex GmbH", payer_email: "ap@globex.example", payer_address: "1 Main St, Berlin", payer_tax_id: "DE123456789", reference: "PO-77", line_items: [{ description: "Design work", quantity: 3, unit_price: 3333, tax_rate: 18 }, { description: "Hosting", quantity: 1, unit_price: 500 }] } });
+  check("an invoice without a number gets the next sequential one", i1.status === 201 && new RegExp(`^INV-${yr}-\\d{4}$`).test(i1.json.number), JSON.stringify(i1.json).slice(0, 200));
+  check("totals: tax is computed per line (9999 + 1800 tax + 500)", i1.json.subtotal === 10499 && i1.json.tax_amount === 1800 && i1.json.total_amount === 12299, JSON.stringify(i1.json));
+  check("the response carries a pay link and a PDF link", /\/pay\/[A-Za-z0-9]+$/.test(i1.json.pay_url) && /\/api\/pay\/.+\/pdf$/.test(i1.json.pdf_url));
+  const i2 = await api("/api/invoices", { method: "POST", key: A.key, body: { currency: "USD", issuer_entity_id: exporter, line_items: [{ description: "x", quantity: 1, unit_price: 100 }] } });
+  check("numbers increase", Number(i2.json.number.slice(-4)) === Number(i1.json.number.slice(-4)) + 1, i2.json.number);
+  const pf = await api("/api/invoices", { method: "POST", key: A.key, body: { kind: "PROFORMA", currency: "USD", issuer_entity_id: exporter, payer_name: "Globex GmbH", line_items: [{ description: "Advance", quantity: 1, unit_price: 250000, tax_rate: 0 }] } });
+  check("a proforma gets its own PF- number series", pf.status === 201 && pf.json.kind === "PROFORMA" && new RegExp(`^PF-${yr}-\\d{4}$`).test(pf.json.number), JSON.stringify(pf.json).slice(0, 160));
+  check("a custom duplicate number is refused", (await api("/api/invoices", { method: "POST", key: A.key, body: { number: i1.json.number, currency: "USD", line_items: [{ description: "x", quantity: 1, unit_price: 1 }] } })).status === 409);
+  check("an invalid line item is refused", (await api("/api/invoices", { method: "POST", key: A.key, body: { currency: "USD", line_items: [{ description: "", quantity: 1, unit_price: 1 }] } })).status === 400);
+  check("another organisation cannot read the invoice", (await api(`/api/invoices/${i1.json.id}`, { key: B.key })).status === 404);
+  const pdfRes = await fetch(`${BASE}/api/invoices/${i1.json.id}/pdf`, { headers: { Authorization: `Bearer ${A.key}` } });
+  const pdfBytes = Buffer.from(await pdfRes.arrayBuffer());
+  check("the invoice downloads as a PDF", pdfRes.status === 200 && pdfRes.headers.get("content-type") === "application/pdf" && pdfBytes.subarray(0, 5).toString() === "%PDF-" && /attachment/.test(pdfRes.headers.get("content-disposition")));
+  const pdfDoc = await PDFDocument.load(pdfBytes);
+  check("the PDF is a real, loadable document with the invoice title", pdfDoc.getPageCount() >= 1 && pdfDoc.getTitle() === `Invoice ${i1.json.number}`, pdfDoc.getTitle());
+  const pfPdf = await PDFDocument.load(Buffer.from(await (await fetch(`${BASE}/api/invoices/${pf.json.id}/pdf`, { headers: { Authorization: `Bearer ${A.key}` } })).arrayBuffer()));
+  check("a proforma PDF is titled as a proforma", pfPdf.getTitle() === `Proforma invoice ${pf.json.number}`);
+  check("a draft is not downloadable by its public link", (await fetch(`${BASE}/api/pay/${i1.json.pay_url.split("/").pop()}/pdf`)).status === 404);
+  const sent = await api(`/api/invoices/${i1.json.id}/send`, { method: "POST", key: A.key, body: { recipientEmail: "ap@globex.example", recipientName: "Globex AP" } });
+  check("emailing the invoice marks it SENT and returns the pay link", sent.status === 200 && sent.json.invoice_status === "SENT" && sent.json.pay_url === i1.json.pay_url, JSON.stringify(sent.json));
+  const pubPdf = await fetch(`${BASE}/api/pay/${i1.json.pay_url.split("/").pop()}/pdf`);
+  check("once sent, the payer can download the PDF from the link", pubPdf.status === 200 && (await pubPdf.arrayBuffer()).byteLength > 1000);
+  const page = await fetch(i1.json.pay_url.replace(/^https?:\/\/[^/]+/, BASE));
+  const html = await page.text();
+  check("the hosted pay page renders the invoice", page.status === 200 && html.includes(i1.json.number) && html.includes("Download PDF"));
+  const conv = await api(`/api/invoices/${pf.json.id}/convert`, { method: "POST", key: A.key, body: {} });
+  check("a proforma converts to a numbered tax invoice", conv.status === 201 && conv.json.kind === "INVOICE" && conv.json.proforma_of === pf.json.id && conv.json.total_amount === 250000 && /^INV-/.test(conv.json.number), JSON.stringify(conv.json).slice(0, 200));
+  check("the proforma is closed after conversion and cannot be converted twice", (await api(`/api/invoices/${pf.json.id}`, { key: A.key })).json.status === "CANCELLED" && (await api(`/api/invoices/${pf.json.id}/convert`, { method: "POST", key: A.key, body: {} })).status === 409);
+  check("a normal invoice cannot be 'converted'", (await api(`/api/invoices/${i1.json.id}/convert`, { method: "POST", key: A.key, body: {} })).status === 409);
+  check("a cancelled invoice is not payable", (await api(`/api/pay/${pf.json.pay_url.split("/").pop()}/intent`, { method: "POST", body: { payer_name: "Globex", payer_country: "DE", payer_email: "x@y.example", token: "USDC" } })).status === 409);
+  check("dashboard users can create invoices with their session", (await api("/api/invoices", { method: "POST", jar: A.jar, body: { currency: "USD", issuer_entity_id: exporter, line_items: [{ description: "Session-made", quantity: 1, unit_price: 5000 }] } })).json?.source === "DASHBOARD");
+  const filtered = await api("/api/invoices?kind=PROFORMA", { key: A.key });
+  check("invoices can be listed and filtered by kind", filtered.status === 200 && filtered.json.data.length >= 1 && filtered.json.data.every(d => d.kind === "PROFORMA"));
+  const link = await api("/api/payment-links", { method: "POST", key: A.key, body: { amount: 12000, currency: "USD", description: "Consulting, March", issuer_entity_id: exporter } });
+  check("a payment link is live immediately", link.status === 201 && link.json.status === "SENT" && /^PL-/.test(link.json.number) && link.json.url === link.json.pay_url, JSON.stringify(link.json).slice(0, 200));
+  check("emailing a link needs a payer email", (await api("/api/payment-links", { method: "POST", key: A.key, body: { amount: 100, currency: "USD", description: "x", issuer_entity_id: exporter, send_email: true } })).status === 400);
+  const cs = await api("/api/checkout/sessions", { method: "POST", key: B.key, body: { issuer_entity_id: bEntity, currency: "USD", amount: 4999, description: "Order 1042", client_reference_id: "order_1042", customer_email: "buyer@example.com", success_url: "https://shop.example.com/thanks?order=1042", cancel_url: "https://shop.example.com/cart" } });
+  check("a hosted checkout session returns a pay URL", cs.status === 201 && cs.json.status === "open" && cs.json.client_reference_id === "order_1042" && /\/pay\//.test(cs.json.url), JSON.stringify(cs.json).slice(0, 200));
+  check("checkout rejects non-https return URLs", (await api("/api/checkout/sessions", { method: "POST", key: B.key, body: { currency: "USD", amount: 100, success_url: "http://evil.example/x" } })).status === 400);
+  check("checkout rejects javascript: return URLs", (await api("/api/checkout/sessions", { method: "POST", key: B.key, body: { currency: "USD", amount: 100, success_url: "javascript:alert(1)" } })).status === 400);
+  check("checkout sessions need an API key, not a browser session", (await api("/api/checkout/sessions", { method: "POST", jar: B.jar, body: { currency: "USD", amount: 100 } })).status === 403);
+  check("a session can be read back by its owner only", (await api(`/api/checkout/sessions/${cs.json.id}`, { key: B.key })).json.status === "open" && (await api(`/api/checkout/sessions/${cs.json.id}`, { key: A.key })).status === 404);
+  check("checkout and links refuse to be created without a payee when the organisation has several entities", (await api("/api/checkout/sessions", { method: "POST", key: A.key, body: { currency: "USD", amount: 100 } })).json?.error?.code === "PAYEE_REQUIRED");
+  const bankLink = await api("/api/payment-links", { method: "POST", key: A.key, body: { amount: 250000, currency: "INR", description: "Design", issuer_entity_id: exporter, purpose_code: "P0802" } });
+  const bankTok = bankLink.json.pay_url.split("/").pop();
+  const bankIntent = await api(`/api/pay/${bankTok}/intent`, { method: "POST", body: { payer_name: "Globex GmbH", payer_country: "DE", payer_email: "ap@globex.example", method: "BANK_TRANSFER", source_currency: "EUR" } });
+  check("a payer can choose a bank transfer in their own currency", bankIntent.status === 201 && ["PENDING_VERIFICATION", "AWAITING_FUNDS"].includes(bankIntent.json.status), JSON.stringify(bankIntent.json).slice(0, 200));
+  const bankInv = await db.invoice.findUnique({ where: { publicToken: bankTok } });
+  const bankTransfer = await db.transfer.findFirst({ where: { invoiceId: bankInv.id } });
+  check("the bank-transfer payment is a fiat-funded transfer in EUR", bankTransfer?.fundingMethod === "FIAT_LOCAL" && bankTransfer?.sourceCurrency === "EUR");
+  check("a second attempt returns the open payment instead of creating another", (await api(`/api/pay/${bankTok}/intent`, { method: "POST", body: { payer_name: "Globex GmbH", payer_country: "DE", payer_email: "ap@globex.example", method: "BANK_TRANSFER", source_currency: "EUR" } })).json?.reference === bankIntent.json.reference);
+  check("stablecoin intent without a token is refused", (await api(`/api/pay/${bankTok}/intent`, { method: "POST", body: { payer_name: "G", payer_country: "DE", payer_email: "a@b.example" } })).status === 400);
+  const noPurpose = await api("/api/payment-links", { method: "POST", key: A.key, body: { amount: 1000, currency: "INR", description: "no purpose", issuer_entity_id: exporter } });
+  const noPurposeTry = await api(`/api/pay/${noPurpose.json.pay_url.split("/").pop()}/intent`, { method: "POST", body: { payer_name: "Globex", payer_country: "DE", payer_email: "a@b.example", method: "BANK_TRANSFER", source_currency: "EUR" } });
+  check("an Indian payee link without a purpose code cannot be paid", [409, 422].includes(noPurposeTry.status) && noPurposeTry.json?.error?.code === "NOT_AVAILABLE", JSON.stringify(noPurposeTry.json).slice(0, 200));
+  check("the pay button script is served", (await fetch(`${BASE}/vaulte-pay.js`)).status === 200);
+  await api(`/api/invoices/${cs.json.id}/cancel`, { method: "POST", key: B.key, body: {} });
+  check("a cancelled checkout session reads as expired and cannot be paid", (await api(`/api/checkout/sessions/${cs.json.id}`, { key: B.key })).json.status === "expired" && (await api(`/api/pay/${cs.json.url.split("/").pop()}/intent`, { method: "POST", body: { payer_name: "Buyer", payer_country: "US", payer_email: "b@y.example", token: "USDC" } })).status === 409);
 
   console.log("== Guardrails");
   const ind = await entity(A.key, "Alpha India Sender", "IN", "INR");

@@ -13,8 +13,11 @@ const Schema = z.object({
   payer_name: z.string().min(2).max(200),
   payer_country: z.string().length(2).toUpperCase(),
   payer_email: z.string().email(),
-  token: z.enum(["USDC", "USDT"]),
-});
+  /** Stablecoin (default) or a bank transfer in the payer's own currency, routed through a licensed partner. */
+  method: z.enum(["STABLECOIN", "BANK_TRANSFER"]).default("STABLECOIN"),
+  token: z.enum(["USDC", "USDT"]).optional(),
+  source_currency: z.string().length(3).toUpperCase().optional(),
+}).refine(v => v.method === "BANK_TRANSFER" || !!v.token, { message: "Choose USDC or USDT", path: ["token"] });
 
 const OPEN = ["PENDING_VERIFICATION", "AWAITING_FUNDS", "FUNDS_DETECTED", "PAYING_OUT", "QUARANTINED"] as const;
 
@@ -44,18 +47,19 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   const guests = await db.entity.count({ where: { organizationId: invoice.organizationId, verificationRef: `guest:${invoice.id}` } });
   if (guests >= 5) return apiError("RATE_LIMITED", "Too many payer registrations for this invoice", 429);
 
+  const bank = d.method === "BANK_TRANSFER";
   try {
     const payer = await db.entity.create({
       data: {
-        legalName: d.payer_name, country: d.payer_country, currency: "USD", entityType: "BUSINESS",
+        legalName: d.payer_name, country: d.payer_country, currency: bank ? (d.source_currency ?? "USD") : "USD", entityType: "BUSINESS",
         verificationStatus: "NOT_STARTED", verificationRef: `guest:${invoice.id}`,
         isSandbox: invoice.organization.kybStatus !== "APPROVED", organizationId: invoice.organizationId,
       },
     });
     const { row } = await createQuoteForDestination(invoice.organizationId, {
       kind: "BUSINESS", senderEntityId: payer.id, recipientEntityId: invoice.issuerEntityId,
-      sourceCurrency: "USD", destCurrency: invoice.currency, destAmount: Number(invoice.totalAmount),
-      fundingMethod: "STABLECOIN", token: d.token, prefer: "balanced",
+      sourceCurrency: bank ? (d.source_currency ?? "USD") : "USD", destCurrency: invoice.currency, destAmount: Number(invoice.totalAmount),
+      fundingMethod: bank ? "FIAT_LOCAL" : "STABLECOIN", ...(bank ? {} : { token: d.token }), prefer: "balanced",
     });
     const transfer = await createTransferFromQuote(invoice.organizationId, {
       quoteId: row.id, invoiceId: invoice.id, purposeCode: invoice.purposeCode ?? undefined,
@@ -66,8 +70,8 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   } catch (e) {
     if (e instanceof ServiceError) {
       // Do not leak internal rules to anonymous payers; give an actionable, generic message.
-      if (e.code === "GUARDRAIL_VIOLATION") return apiError("NOT_AVAILABLE", "This invoice cannot be paid with stablecoin right now. Please contact the sender.", 409);
-      if (e.code === "NO_ROUTE" || e.code === "UNSUPPORTED_CURRENCY") return apiError("NOT_AVAILABLE", "Stablecoin payment is not available for this invoice.", 422);
+      if (e.code === "GUARDRAIL_VIOLATION") return apiError("NOT_AVAILABLE", "This invoice cannot be paid this way right now. Please contact the sender.", 409);
+      if (e.code === "NO_ROUTE" || e.code === "UNSUPPORTED_CURRENCY") return apiError("NOT_AVAILABLE", "This payment method is not available for this invoice.", 422);
     }
     return handleServiceError(e);
   }

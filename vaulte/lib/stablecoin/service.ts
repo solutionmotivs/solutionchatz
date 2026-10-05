@@ -533,7 +533,10 @@ async function onPayoutCompleted(transferId: string, efiraRef?: string | null): 
   });
   await recordEfiraReference(done, done.efiraRef).catch(e => log("error", "efira record failed", { error: e }));
   await emitWebhookEvent({ organizationId: t.organizationId, event: "transfer.completed", data: { transfer_id: t.id, efira_ref: done.efiraRef } });
-  if (t.invoiceId) await emitWebhookEvent({ organizationId: t.organizationId, event: "invoice.paid", data: { invoice_id: t.invoiceId, transfer_id: t.id } });
+  if (t.invoiceId) {
+    const inv = await db.invoice.findUnique({ where: { id: t.invoiceId }, select: { number: true, reference: true, source: true } });
+    await emitWebhookEvent({ organizationId: t.organizationId, event: "invoice.paid", data: { invoice_id: t.invoiceId, transfer_id: t.id, number: inv?.number ?? null, reference: inv?.reference ?? null, source: inv?.source ?? null } });
+  }
   return done;
 }
 

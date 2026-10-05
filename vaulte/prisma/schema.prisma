@@ -46,6 +46,11 @@ enum RiskTier {
   BLOCKED
 }
 
+enum InvoiceKind {
+  INVOICE
+  PROFORMA
+}
+
 enum InvoiceStatus {
   DRAFT
   SENT
@@ -390,6 +395,19 @@ model Invoice {
   recipientName  String?
   emailSentAt    DateTime?
   viewCount      Int       @default(0)
+
+  /// INVOICE or PROFORMA (an estimate that can still be paid as an advance; converting it issues a numbered invoice).
+  kind         InvoiceKind @default(INVOICE)
+  payerAddress String?
+  payerTaxId   String?
+  /// Buyer's purchase-order number or the merchant's own order id (echoed in webhooks).
+  reference    String?
+  proformaOfId String?
+  /// Hosted-checkout return links (https only) and the merchant's own reference.
+  successUrl   String?
+  cancelUrl    String?
+  /// DASHBOARD | API | PAYMENT_LINK | CHECKOUT
+  source       String      @default("DASHBOARD")
 
   issuerEntityId String?
   payerEntityId  String?

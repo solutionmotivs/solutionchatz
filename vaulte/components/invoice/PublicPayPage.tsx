@@ -7,7 +7,7 @@ interface PayView {
   message: string;
   token: string | null;
   chain: string | null;
-  funding_instructions: null | { address?: string; chain?: string; token?: string; amount_token?: string; expires_at?: string; warning?: string };
+  funding_instructions: null | { type?: string; address?: string; chain?: string; token?: string; amount_token?: string; expires_at?: string; warning?: string; currency?: string; amount?: number; reference?: string; bank_details?: Record<string, string> };
   confirmations: number;
   reference: string;
 }
@@ -20,6 +20,7 @@ interface Props {
     dueDate: string | null; notes: string | null; recipientName: string | null;
     organizationName: string; poweredBy: boolean;
     lineItems: { description: string; quantity: number; unitPrice: number; taxRate: number; total: number }[];
+    kind?: string; successUrl?: string | null; cancelUrl?: string | null; reference?: string | null;
   };
 }
 
@@ -27,7 +28,7 @@ const isPaid = (status: string) => status === "PAID";
 
 export default function PublicPayPage({ invoice, payToken }: Props) {
   const [payStep, setPayStep] = useState<"view" | "details" | "processing" | "instructions">("view");
-  const [form, setForm] = useState({ companyName: "", email: "", country: "US", token: "USDC" });
+  const [form, setForm] = useState({ companyName: "", email: "", country: "US", token: "USDC" }); // token: USDC | USDT | BANK:<currency>
   const [pay, setPay] = useState<PayView | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -49,6 +50,8 @@ export default function PublicPayPage({ invoice, payToken }: Props) {
   }).format(n / 100);
 
   const paid = isPaid(invoice.status);
+  const isProforma = invoice.kind === "PROFORMA";
+  const docLabel = isProforma ? "Proforma invoice" : "Invoice";
 
   async function handlePay(e: React.FormEvent) {
     e.preventDefault();
@@ -58,7 +61,7 @@ export default function PublicPayPage({ invoice, payToken }: Props) {
       const res = await fetch(`/api/pay/${payToken}/intent`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ payer_name: form.companyName, payer_email: form.email, payer_country: form.country, token: form.token }),
+        body: JSON.stringify({ payer_name: form.companyName, payer_email: form.email, payer_country: form.country, ...(form.token.startsWith("BANK:") ? { method: "BANK_TRANSFER", source_currency: form.token.slice(5) } : { method: "STABLECOIN", token: form.token }) }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -99,6 +102,7 @@ export default function PublicPayPage({ invoice, payToken }: Props) {
                 <div className="font-mono text-[9px] uppercase tracking-widest text-mist mb-1">Payment Reference</div>
                 <div className="font-mono text-xs text-ink">{invoice.number}-{pay?.reference}</div>
               </div>
+              {invoice.successUrl && <p className="mt-6"><a className="btn-primary inline-block" href={invoice.successUrl}>Return to {invoice.organizationName}</a></p>}
               {invoice.poweredBy && (
                 <p className="mt-8 font-mono text-[9px] text-mist">
                   Processed by <a href="https://vaulte.io" className="text-gold hover:underline">Vaulte</a> — B2B Payment Infrastructure
@@ -109,11 +113,12 @@ export default function PublicPayPage({ invoice, payToken }: Props) {
             <div className="grid grid-cols-[1fr_340px] gap-8 items-start">
               {/* Invoice detail */}
               <div>
-                <div className="section-tag mb-4">Invoice from {invoice.organizationName}</div>
+                <div className="section-tag mb-4">{docLabel} from {invoice.organizationName}</div>
                 <div className="flex items-start justify-between mb-8">
                   <div>
                     <h1 className="font-serif text-4xl text-ink mb-1">{fmt(invoice.totalAmount)}</h1>
-                    <div className="font-mono text-[10px] text-mist">Invoice #{invoice.number}</div>
+                    <div className="font-mono text-[10px] text-mist">{docLabel} #{invoice.number}{invoice.reference ? ` · Ref ${invoice.reference}` : ""}</div>
+                    <a className="font-mono text-[10px] text-gold hover:underline" href={`/api/pay/${payToken}/pdf`}>Download PDF</a>
                     {invoice.dueDate && (
                       <div className="font-mono text-[10px] text-mist mt-1">
                         Due: {new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(new Date(invoice.dueDate))}
@@ -162,6 +167,7 @@ export default function PublicPayPage({ invoice, payToken }: Props) {
                   </div>
                 </div>
 
+                {isProforma && <p className="mt-4 font-mono text-[10px] text-mist leading-relaxed">This is a proforma invoice: an estimate, not a tax invoice. You can pay it as an advance; a numbered tax invoice follows.</p>}
                 {invoice.notes && (
                   <div className="mt-4 p-4 border border-ink/8 bg-cream/40">
                     <div className="font-mono text-[9px] uppercase tracking-widest text-mist mb-2">Notes</div>
@@ -187,7 +193,7 @@ export default function PublicPayPage({ invoice, payToken }: Props) {
                     <div className="space-y-2 mb-6">
                       {[
                         { icon: "🔒", text: "Funds are held by a licensed payment partner" },
-                        { icon: "⚡", text: "Pay with USDC or USDT" },
+                        { icon: "⚡", text: "Pay with USDC, USDT or a bank transfer" },
                         { icon: "📄", text: "Recipient is paid in " + invoice.currency + " in their bank" },
                       ].map(item => (
                         <div key={item.text} className="flex items-center gap-3 font-mono text-[10px] text-slate">
@@ -240,6 +246,18 @@ export default function PublicPayPage({ invoice, payToken }: Props) {
                         )}
                       </div>
                     )}
+                    {pay.funding_instructions?.type === "FIAT" && pay.funding_instructions.bank_details && (
+                      <div className="border border-ink/10 p-4 space-y-3">
+                        <div>
+                          <div className="label-text">Send exactly</div>
+                          <div className="font-serif text-2xl text-ink">{pay.funding_instructions.currency} {((pay.funding_instructions.amount ?? 0) / 100).toLocaleString("en-US", { minimumFractionDigits: 2 })}</div>
+                        </div>
+                        {Object.entries(pay.funding_instructions.bank_details).map(([k, v]) => (
+                          <div key={k}><div className="label-text">{k.replace(/_/g, " ")}</div><div className="font-mono text-[11px] text-ink break-all select-all">{v}</div></div>
+                        ))}
+                        <div className="font-mono text-[10px] text-rust leading-relaxed">Use the reference exactly as shown so the payment can be matched. Send from a bank account in your company's name.</div>
+                      </div>
+                    )}
                     {["FAILED", "CANCELLED", "EXPIRED"].includes(pay.status) && (
                       <button onClick={() => { setPay(null); setPayStep("details"); }} className="btn-ghost w-full text-[10px]">Start again</button>
                     )}
@@ -273,6 +291,7 @@ export default function PublicPayPage({ invoice, payToken }: Props) {
                       <select className="input-field" value={form.token} onChange={e => setForm(f => ({ ...f, token: e.target.value }))}>
                         <option value="USDC">USDC</option>
                         <option value="USDT">USDT (not available for EU companies)</option>
+                        {["USD", "EUR", "GBP", "AUD", "CAD", "SGD", "AED"].filter(c => c !== invoice.currency).map(c => <option key={c} value={`BANK:${c}`}>Bank transfer in {c}</option>)}
                       </select>
                     </div>
                     {error && <div className="font-mono text-[10px] text-rust">{error}</div>}
@@ -284,7 +303,7 @@ export default function PublicPayPage({ invoice, payToken }: Props) {
                       ← Back
                     </button>
                     <p className="font-mono text-[9px] text-mist leading-relaxed">
-                      A licensed payment partner receives your stablecoin and pays the recipient in their bank.
+                      A licensed payment partner receives your stablecoin or bank transfer and pays the recipient in their bank.
                       Vaulte does not hold your funds. Your company may be verified before payment details are shown.
                     </p>
                   </form>

@@ -18,7 +18,7 @@ export async function generateMetadata({ params }: { params: { token: string } }
   }).format(Number(invoice.totalAmount) / 100);
 
   return {
-    title: `Invoice ${invoice.number} — ${amount} from ${invoice.organization.name}`,
+    title: `${invoice.kind === "PROFORMA" ? "Proforma" : "Invoice"} ${invoice.number} — ${amount} from ${invoice.organization.name}`,
     description: `Pay invoice ${invoice.number} from ${invoice.organization.name} securely via Vaulte.`,
   };
 }
@@ -58,6 +58,7 @@ export default async function PublicPayPageServer({ params }: { params: { token:
         recipientName: invoice.recipientName,
         organizationName: invoice.organization.name,
         poweredBy: invoice.organization.poweredByEnabled,
+        kind: invoice.kind, successUrl: invoice.status === "PAID" ? invoice.successUrl : null, cancelUrl: invoice.cancelUrl, reference: invoice.reference,
         lineItems: invoice.lineItems.map(li => ({
           description: li.description,
           quantity: li.quantity,
