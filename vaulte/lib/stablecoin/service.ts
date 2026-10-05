@@ -1,0 +1,751 @@
+// Orchestration for stablecoin / fiat cross-border transfers.
+// Vaulte never custodies funds: partners receive money, convert, and pay out. This service
+// picks routes, enforces guardrails, keeps the memo ledger, and reacts to partner events.
+import { Prisma, type Entity, type Transfer } from "@prisma/client";
+import { db } from "@/lib/db";
+import { screenEntity } from "@/lib/compliance/aml";
+import { screenWallet } from "@/lib/compliance/wallet";
+import {
+  calendarYearStart, evaluateTransfer, financialYearStart, type GuardContext, type GuardResult,
+} from "@/lib/guardrails";
+import { buildBreakdown, fromUsd, markupBpsFor, toUsd, validateMargin } from "@/lib/pricing";
+import { findRoutes, nextRoute, pickAlternates, rankRoutes, routeCostUsd } from "@/lib/routing/engine";
+import {
+  amountsFromBreakdown, feesJournal, fundsReceivedJournal, payoutJournals, postJournal, transferBalances, type JournalLine,
+} from "@/lib/ledger";
+import { getPartner } from "@/lib/psp/stablecoin/registry";
+import { emitWebhookEvent } from "@/lib/webhooks/dispatch";
+import type {
+  CostBreakdown, FundingMethodT, Preference, Route, Token, TransferKindT,
+} from "./types";
+import { getRateTable } from "./rates";
+
+const QUOTE_TTL_SEC = Number(process.env.QUOTE_TTL_SEC ?? 300);
+const MAX_FAILOVERS = 3;
+const VERIFICATION_ONLY = new Set(["SENDER_NOT_VERIFIED", "RECIPIENT_NOT_VERIFIED"]);
+/** Not known at quote time: supplied when the transfer is created. They never block a quote, only the transfer. */
+const DOCUMENT_ONLY = new Set(["INVOICE_REQUIRED", "PURPOSE_CODE_REQUIRED", "PAN_REQUIRED"]);
+const ACTIVE_STATUSES = ["PENDING_VERIFICATION", "AWAITING_FUNDS", "FUNDS_DETECTED", "PAYING_OUT", "COMPLETED", "QUARANTINED"] as const;
+
+export class ServiceError extends Error {
+  constructor(public code: string, message: string, public status = 400, public details?: unknown) {
+    super(message);
+  }
+}
+
+export interface QuoteInput {
+  kind: TransferKindT;
+  senderEntityId: string;
+  recipientEntityId: string;
+  sourceCurrency: string;
+  destCurrency: string;
+  /** minor units of the source currency */
+  sourceAmount: number;
+  fundingMethod: FundingMethodT;
+  token?: Token;
+  prefer?: Preference;
+}
+
+const asJson = (v: unknown) => v as Prisma.InputJsonValue;
+
+function lastLeg(route: Route) {
+  return route.legs[route.legs.length - 1];
+}
+
+async function loadEntities(orgId: string, senderId: string, recipientId: string) {
+  const [sender, recipient] = await Promise.all([
+    db.entity.findFirst({ where: { id: senderId, organizationId: orgId } }),
+    db.entity.findFirst({ where: { id: recipientId, organizationId: orgId } }),
+  ]);
+  if (!sender) throw new ServiceError("NOT_FOUND", "Sender entity not found", 404);
+  if (!recipient) throw new ServiceError("NOT_FOUND", "Recipient entity not found", 404);
+  return { sender, recipient };
+}
+
+function partyCtx(e: Entity) {
+  return {
+    verified: e.verificationStatus === "APPROVED",
+    entityType: (e.entityType === "INDIVIDUAL" ? "INDIVIDUAL" : "BUSINESS") as "BUSINESS" | "INDIVIDUAL",
+    country: e.country,
+    panVerified: e.panVerified,
+  };
+}
+
+async function buildGuardContext(args: {
+  kind: TransferKindT;
+  sender: Entity;
+  recipient: Entity;
+  route: Route;
+  fundingMethod: FundingMethodT;
+  amountUsd: number;
+  inrPerUsd?: number;
+  purposeCode?: string | null;
+  invoiceId?: string | null;
+  excludeTransferId?: string;
+}): Promise<GuardContext> {
+  const { sender, recipient, route } = args;
+  const [recipientCount, senderFy] = await Promise.all([
+    db.transfer.count({
+      where: {
+        recipientEntityId: recipient.id, kind: "PERSONAL", status: { in: [...ACTIVE_STATUSES] },
+        createdAt: { gte: calendarYearStart() }, ...(args.excludeTransferId ? { id: { not: args.excludeTransferId } } : {}),
+      },
+    }),
+    db.transfer.aggregate({
+      where: {
+        senderEntityId: sender.id, status: { in: [...ACTIVE_STATUSES] }, createdAt: { gte: financialYearStart() },
+        ...(args.excludeTransferId ? { id: { not: args.excludeTransferId } } : {}),
+      },
+      _sum: { sourceAmountUsd: true },
+    }),
+  ]);
+  const indiaInvolved = sender.country === "IN" || recipient.country === "IN";
+  return {
+    kind: args.kind,
+    originCountry: sender.country,
+    destCountry: recipient.country,
+    amountUsd: args.amountUsd,
+    amountInr: indiaInvolved && args.inrPerUsd ? args.amountUsd * args.inrPerUsd : undefined,
+    fundingMethod: args.fundingMethod,
+    usesStablecoin: route.usesStablecoin,
+    token: route.token,
+    payoutAssetIsFiat: ["OFFRAMP", "DIRECT", "INDIA_PAYOUT"].includes(lastLeg(route).kind),
+    purposeCode: args.purposeCode ?? null,
+    invoiceId: args.invoiceId ?? null,
+    sender: partyCtx(sender),
+    recipient: partyCtx(recipient),
+    indiaAuths: route.legs.flatMap(l => (l.indiaAuth ? [l.indiaAuth] : [])),
+    history: {
+      recipientTransfersThisCalendarYear: recipientCount,
+      senderUsdThisFinancialYear: Number(senderFy._sum.sourceAmountUsd ?? 0n) / 100,
+    },
+  };
+}
+
+function summariseRoute(r: Route) {
+  return {
+    id: r.id,
+    partners: r.partners,
+    token: r.token,
+    chain: r.chain,
+    legs: r.legs.map(l => ({ id: l.id, partner: l.partner, kind: l.kind, rails: l.rails, country: l.country })),
+    eta_seconds: r.etaSec,
+  };
+}
+
+// ── Quotes ───────────────────────────────────────────────────────────────────────
+
+export interface BuiltQuote {
+  routes: Route[];
+  chosen: Route;
+  breakdown: CostBreakdown;
+  guard: GuardResult;
+  sourceAmountUsd: number;
+  destAmountMinor: number;
+  sender: Entity;
+  recipient: Entity;
+}
+
+export async function evaluateQuote(orgId: string, input: QuoteInput, opts: { ignoreGuardrails?: boolean } = {}): Promise<BuiltQuote> {
+  if (input.fundingMethod === "STABLECOIN" && input.sourceCurrency !== "USD") {
+    throw new ServiceError("INVALID_FUNDING", "Stablecoin funding is priced in USD; use source_currency USD", 400);
+  }
+  if (!Number.isInteger(input.sourceAmount) || input.sourceAmount <= 0) {
+    throw new ServiceError("VALIDATION_ERROR", "source_amount must be a positive integer (minor units)", 400);
+  }
+  const { sender, recipient } = await loadEntities(orgId, input.senderEntityId, input.recipientEntityId);
+  const rates = await getRateTable([input.sourceCurrency, input.destCurrency, "INR"]).catch(e => {
+    throw new ServiceError("UNSUPPORTED_CURRENCY", e instanceof Error ? e.message : "Rate unavailable", 422);
+  });
+  const sourceAmountUsd = toUsd(input.sourceAmount, input.sourceCurrency, rates);
+  const prefer = input.prefer ?? "balanced";
+
+  const all = findRoutes({
+    kind: input.kind, originCountry: sender.country, destCountry: recipient.country,
+    sourceCurrency: input.sourceCurrency, destCurrency: input.destCurrency, amountUsd: sourceAmountUsd,
+    fundingMethod: input.fundingMethod, token: input.token,
+  });
+  if (!all.length) {
+    throw new ServiceError("NO_ROUTE", "No compliant route is available for this corridor, amount and type", 422);
+  }
+  const ranked = rankRoutes(all, sourceAmountUsd, prefer);
+
+  // Pick the best route that also passes the guardrails (the guardrails depend on the legs used).
+  let chosen: Route | null = null;
+  let guard: GuardResult = { allowed: false, violations: [], reviewFlags: [] };
+  let firstGuard: GuardResult | null = null;
+  for (const r of ranked) {
+    const ctx = await buildGuardContext({
+      kind: input.kind, sender, recipient, route: r, fundingMethod: input.fundingMethod,
+      amountUsd: sourceAmountUsd, inrPerUsd: rates.INR,
+    });
+    const g = evaluateTransfer(ctx);
+    firstGuard ??= g;
+    const blocking = g.violations.filter(v => !VERIFICATION_ONLY.has(v.code) && !DOCUMENT_ONLY.has(v.code));
+    if (blocking.length === 0 || opts.ignoreGuardrails) {
+      chosen = r;
+      guard = g;
+      break;
+    }
+  }
+  if (!chosen) {
+    const hard = (firstGuard?.violations ?? []).filter(v => !VERIFICATION_ONLY.has(v.code) && !DOCUMENT_ONLY.has(v.code));
+    throw new ServiceError("GUARDRAIL_VIOLATION", "This transfer is not allowed", 422, hard);
+  }
+
+  const markupBps = markupBpsFor(input.kind, sourceAmountUsd);
+  const breakdown = buildBreakdown({
+    route: chosen, kind: input.kind, sourceCurrency: input.sourceCurrency, destCurrency: input.destCurrency,
+    sourceAmountMinor: input.sourceAmount, rates, markupBps,
+  });
+  const margin = validateMargin(breakdown);
+  if (!margin.ok) throw new ServiceError("PRICING_REJECTED", margin.reason ?? "Quote rejected", 422);
+
+  const destAmountMinor = Math.floor(fromUsd(breakdown.destAmountUsd, input.destCurrency, rates) * 100);
+  return { routes: ranked, chosen, breakdown, guard, sourceAmountUsd, destAmountMinor, sender, recipient };
+}
+
+export async function createQuote(orgId: string, input: QuoteInput) {
+  const q = await evaluateQuote(orgId, input);
+  const alternates = pickAlternates(q.routes, q.chosen);
+  const expiresAt = new Date(Date.now() + QUOTE_TTL_SEC * 1000);
+  const row = await db.quote.create({
+    data: {
+      expiresAt, kind: input.kind, senderEntityId: input.senderEntityId, recipientEntityId: input.recipientEntityId, originCountry: q.sender.country, destCountry: q.recipient.country,
+      sourceCurrency: input.sourceCurrency, destCurrency: input.destCurrency, sourceAmount: BigInt(input.sourceAmount),
+      destAmount: BigInt(q.destAmountMinor), fundingMethod: input.fundingMethod, prefer: input.prefer ?? "balanced",
+      route: asJson(q.chosen), alternates: asJson(alternates), breakdown: asJson(q.breakdown), organizationId: orgId,
+    },
+  });
+  return { row, built: q };
+}
+
+export function serializeQuote(row: { id: string; expiresAt: Date; sourceCurrency: string; destCurrency: string; sourceAmount: bigint; destAmount: bigint; fundingMethod: string; kind: string }, built: BuiltQuote) {
+  return {
+    id: row.id,
+    kind: row.kind,
+    expires_at: row.expiresAt.toISOString(),
+    source: { currency: row.sourceCurrency, amount: Number(row.sourceAmount), country: built.sender.country },
+    destination: { currency: row.destCurrency, amount: Number(row.destAmount), country: built.recipient.country },
+    funding_method: row.fundingMethod,
+    route: summariseRoute(built.chosen),
+    estimated_arrival_seconds: built.chosen.etaSec,
+    breakdown: built.breakdown,
+    review_flags: built.guard.reviewFlags,
+    verification_pending: built.guard.violations.filter(v => VERIFICATION_ONLY.has(v.code)).map(v => v.code),
+    documents_required: built.guard.violations.filter(v => DOCUMENT_ONLY.has(v.code)).map(v => v.code),
+    note: "Rates are firm until expires_at. Vaulte does not hold funds; the licensed partner executes the transfer.",
+  };
+}
+
+// ── Transfers ────────────────────────────────────────────────────────────────────
+
+export interface CreateTransferInput {
+  quoteId: string;
+  purposeCode?: string;
+  invoiceId?: string;
+  idempotencyKey?: string;
+  description?: string;
+  isSandbox?: boolean;
+}
+
+const cents = (usd: number) => BigInt(Math.round(usd * 100));
+
+export async function createTransferFromQuote(orgId: string, input: CreateTransferInput): Promise<Transfer> {
+  if (input.idempotencyKey) {
+    const existing = await db.transfer.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
+    if (existing) {
+      if (existing.organizationId !== orgId) throw new ServiceError("CONFLICT", "Idempotency key already used", 409);
+      return existing;
+    }
+  }
+  const quote = await db.quote.findFirst({ where: { id: input.quoteId, organizationId: orgId } });
+  if (!quote) throw new ServiceError("NOT_FOUND", "Quote not found", 404);
+  if (quote.status !== "ACTIVE") throw new ServiceError("QUOTE_USED", "Quote already used or expired", 409);
+  if (quote.expiresAt.getTime() < Date.now()) {
+    await db.quote.update({ where: { id: quote.id }, data: { status: "EXPIRED" } });
+    throw new ServiceError("QUOTE_EXPIRED", "Quote expired; request a new one", 409);
+  }
+
+  const route = quote.route as unknown as Route;
+  const breakdown = quote.breakdown as unknown as CostBreakdown;
+  const { sender, recipient } = await loadEntities(orgId, quote.senderEntityId, quote.recipientEntityId);
+
+  // Re-run guardrails with the real documents and the up-to-date verification state.
+  const ctx = await buildGuardContext({
+    kind: quote.kind, sender, recipient, route, fundingMethod: quote.fundingMethod,
+    amountUsd: breakdown.sourceAmountUsd, inrPerUsd: breakdown.destCurrency === "INR" ? breakdown.midRateDestPerUsd : breakdown.sourceCurrency === "INR" ? breakdown.midRateSourcePerUsd : undefined,
+    purposeCode: input.purposeCode, invoiceId: input.invoiceId,
+  });
+  const guard = evaluateTransfer(ctx);
+  const blocking = guard.violations.filter(v => !VERIFICATION_ONLY.has(v.code));
+  if (blocking.length) throw new ServiceError("GUARDRAIL_VIOLATION", "This transfer is not allowed", 422, blocking);
+
+  // Claim the quote atomically so two requests cannot use it twice.
+  const claimed = await db.quote.updateMany({ where: { id: quote.id, status: "ACTIVE" }, data: { status: "USED" } });
+  if (claimed.count !== 1) throw new ServiceError("QUOTE_USED", "Quote already used", 409);
+
+  const needsVerification = guard.violations.length > 0;
+  const partnerCostUsd = cents(breakdown.partnerCostUsd);
+  const markupUsd = cents(breakdown.markupUsd);
+  const transfer = await db.transfer.create({
+    data: {
+      kind: quote.kind,
+      status: needsVerification ? "PENDING_VERIFICATION" : "AWAITING_FUNDS",
+      statusReason: needsVerification ? guard.violations.map(v => v.code).join(",") : null,
+      fundingMethod: quote.fundingMethod,
+      isSandbox: input.isSandbox ?? true,
+      originCountry: quote.originCountry, destCountry: quote.destCountry,
+      sourceCurrency: quote.sourceCurrency, destCurrency: quote.destCurrency,
+      sourceAmount: quote.sourceAmount, destAmount: quote.destAmount,
+      sourceAmountUsd: cents(breakdown.sourceAmountUsd),
+      markupBps: breakdown.markupBps, markupUsd, partnerCostUsd,
+      quotedFeesUsd: partnerCostUsd + markupUsd,
+      token: route.token, chain: route.chain,
+      route: asJson(route), alternates: quote.alternates as Prisma.InputJsonValue,
+      purposeCode: input.purposeCode ?? null, invoiceId: input.invoiceId ?? null,
+      idempotencyKey: input.idempotencyKey ?? null, description: input.description ?? null,
+      organizationId: orgId, quoteId: quote.id, senderEntityId: sender.id, recipientEntityId: recipient.id,
+    },
+  });
+  await db.auditLog.create({
+    data: { action: "transfer.created", resourceType: "Transfer", resourceId: transfer.id, organizationId: orgId, metadata: { kind: quote.kind, status: transfer.status } },
+  });
+  await emitWebhookEvent({ organizationId: orgId, event: "transfer.created", data: { transfer_id: transfer.id, status: transfer.status } });
+  if (!needsVerification) return issueFunding(transfer.id);
+  return transfer;
+}
+
+/** Ask the funding partner for deposit / bank details. Called once parties are verified. */
+export async function issueFunding(transferId: string): Promise<Transfer> {
+  const t = await db.transfer.findUniqueOrThrow({ where: { id: transferId } });
+  if (t.fundingMethod === "VIRTUAL_ACCOUNT") return t;
+  const route = t.route as unknown as Route;
+  const partner = getPartner(route.legs[0].partner);
+  let instructions: Record<string, unknown>;
+  if (t.fundingMethod === "STABLECOIN") {
+    const token = route.token as Token;
+    const chain = route.chain!;
+    const expectedMicro = BigInt(Math.round(Number(t.sourceAmountUsd) * 10_000)); // 1 token = 1 USD; 6 decimals
+    const dep = await partner.createDeposit({ transferId: t.id, token, chain, expectedAmountMicro: expectedMicro });
+    await db.stablecoinDeposit.create({
+      data: {
+        partner: partner.id, partnerRef: dep.partnerRef, token, chain, address: dep.address,
+        expectedAmount: expectedMicro, expiresAt: dep.expiresAt, transferId: t.id,
+      },
+    });
+    instructions = {
+      type: "STABLECOIN", token, chain, address: dep.address, memo: dep.memo ?? null,
+      amount_token: (Number(expectedMicro) / 1_000_000).toFixed(2), expires_at: dep.expiresAt.toISOString(),
+      warning: `Send only ${token} on ${chain} to this address. Funds sent on another network may be lost.`,
+    };
+  } else {
+    const f = await partner.createFiatFunding({ transferId: t.id, currency: t.sourceCurrency, amountMinor: t.sourceAmount });
+    instructions = { type: "FIAT", currency: t.sourceCurrency, amount: Number(t.sourceAmount), reference: f.reference, bank_details: f.bankDetails };
+  }
+  return db.transfer.update({
+    where: { id: t.id },
+    data: { status: "AWAITING_FUNDS", statusReason: null, fundingInstructions: asJson(instructions) },
+  });
+}
+
+/** After a party is verified, release any transfers that were only waiting for that. */
+export async function activatePendingTransfers(entityId: string): Promise<number> {
+  const pending = await db.transfer.findMany({
+    where: { status: "PENDING_VERIFICATION", OR: [{ senderEntityId: entityId }, { recipientEntityId: entityId }] },
+    include: { sender: true, recipient: true },
+  });
+  let activated = 0;
+  for (const t of pending) {
+    if (t.sender.verificationStatus !== "APPROVED" || t.recipient.verificationStatus !== "APPROVED") continue;
+    const route = t.route as unknown as Route;
+    const ctx = await buildGuardContext({
+      kind: t.kind, sender: t.sender, recipient: t.recipient, route, fundingMethod: t.fundingMethod,
+      amountUsd: Number(t.sourceAmountUsd) / 100, purposeCode: t.purposeCode, invoiceId: t.invoiceId, excludeTransferId: t.id,
+      inrPerUsd: (await getRateTable(["INR"]).catch(() => ({ INR: undefined as unknown as number }))).INR,
+    });
+    if (evaluateTransfer(ctx).allowed) {
+      await issueFunding(t.id);
+      activated++;
+    }
+  }
+  return activated;
+}
+
+// ── Funds received, payout, completion, failover ─────────────────────────────────
+
+function lines(...j: JournalLine[][]) {
+  return j;
+}
+
+/** Called when the partner confirms the sender's money arrived. Runs checks, books the ledger, starts the payout. */
+async function onFundsConfirmed(transferId: string, opts: { receivedMicro?: bigint; fromAddress?: string; depositId?: string }) {
+  const t = await db.transfer.findUniqueOrThrow({ where: { id: transferId } });
+  if (t.status !== "AWAITING_FUNDS" && t.status !== "QUARANTINED") return t; // already progressed (idempotent)
+
+  if (opts.fromAddress) {
+    const w = await screenWallet(opts.fromAddress);
+    if (!w.cleared) return quarantine(t.id, `SANCTIONS_REVIEW: ${w.reason ?? "wallet flagged"}`, true);
+  }
+  if (opts.receivedMicro !== undefined && opts.depositId) {
+    const dep = await db.stablecoinDeposit.findUniqueOrThrow({ where: { id: opts.depositId } });
+    if (opts.receivedMicro < dep.expectedAmount) {
+      await db.stablecoinDeposit.update({ where: { id: dep.id }, data: { status: "UNDERPAID", receivedAmount: opts.receivedMicro } });
+      return quarantine(t.id, "UNDERPAID: received less than the quoted amount; partner will refund or top up", true);
+    }
+    await db.stablecoinDeposit.update({ where: { id: dep.id }, data: { status: "CONFIRMED", receivedAmount: opts.receivedMicro } });
+  }
+
+  const a = amountsFromBreakdown(Number(t.sourceAmountUsd) / 100, Number(t.partnerCostUsd) / 100, Number(t.markupUsd) / 100);
+  await db.$transaction(async tx => {
+    await tx.transfer.update({ where: { id: t.id }, data: { status: "FUNDS_DETECTED", statusReason: null } });
+    await postJournal(tx, { kind: "FUNDS_RECEIVED", transferId: t.id, lines: fundsReceivedJournal(a) });
+    await postJournal(tx, { kind: "FEES", transferId: t.id, lines: feesJournal(a) });
+  });
+  await emitWebhookEvent({ organizationId: t.organizationId, event: "transfer.funded", data: { transfer_id: t.id } });
+  return dispatchPayout(t.id);
+}
+
+async function quarantine(transferId: string, reason: string, fundsKnown: boolean): Promise<Transfer> {
+  const t = await db.transfer.update({
+    where: { id: transferId },
+    data: {
+      status: "QUARANTINED", statusReason: reason,
+      ...(fundsKnown ? { fundingInstructions: asJson({ ...(((await db.transfer.findUnique({ where: { id: transferId }, select: { fundingInstructions: true } }))?.fundingInstructions as object) ?? {}), fundsConfirmed: true }) } : {}),
+    },
+  });
+  await emitWebhookEvent({ organizationId: t.organizationId, event: "compliance.flagged", data: { transfer_id: t.id, reason } });
+  return t;
+}
+
+export async function dispatchPayout(transferId: string): Promise<Transfer> {
+  const t = await db.transfer.findUniqueOrThrow({ where: { id: transferId }, include: { recipient: true } });
+  const route = t.route as unknown as Route;
+  const leg = lastLeg(route);
+  try {
+    const invoice = t.invoiceId ? await db.invoice.findUnique({ where: { id: t.invoiceId }, select: { number: true } }) : null;
+    const res = await getPartner(leg.partner).createPayout({
+      transferId: t.id, route, destCurrency: t.destCurrency, destAmountMinor: t.destAmount,
+      recipientName: t.recipient.legalName, recipientCountry: t.recipient.country,
+      purposeCode: t.purposeCode, invoiceNumber: invoice?.number ?? null,
+    });
+    return db.transfer.update({ where: { id: t.id }, data: { status: "PAYING_OUT", externalRef: res.partnerRef } });
+  } catch (e) {
+    return handlePayoutFailure(t.id, e instanceof Error ? e.message : "payout dispatch failed");
+  }
+}
+
+/** Fail over to another payout partner (same funding partner), or fail and reverse the ledger. */
+export async function handlePayoutFailure(transferId: string, reason: string): Promise<Transfer> {
+  const t = await db.transfer.findUniqueOrThrow({ where: { id: transferId } });
+  const route = t.route as unknown as Route;
+  const alternates = (t.alternates as unknown as Route[]) ?? [];
+  const failedPartner = lastLeg(route).partner;
+  const sameFunding = alternates.filter(r => r.legs[0].partner === route.legs[0].partner);
+  const next = t.routeIndex < MAX_FAILOVERS ? nextRoute(rankRoutes(sameFunding, Number(t.sourceAmountUsd) / 100, "cheapest"), [failedPartner]) : null;
+
+  if (next) {
+    // Customer keeps the quoted amount; if the new partner costs more, Vaulte's markup absorbs it.
+    const newCost = cents(routeCostUsd(next, Number(t.sourceAmountUsd) / 100));
+    const oldMarkup = t.markupUsd;
+    const oldCost = t.partnerCostUsd;
+    const newMarkup = t.quotedFeesUsd - newCost;
+    await db.$transaction(async tx => {
+      // Re-book the fee split so the memo ledger matches reality: reverse old fee journal, post new one.
+      const oldA = { sourceUsdCents: t.sourceAmountUsd, partnerCostUsdCents: oldCost, markupUsdCents: oldMarkup };
+      const newA = { sourceUsdCents: t.sourceAmountUsd, partnerCostUsdCents: newCost, markupUsdCents: newMarkup };
+      const hasFees = await tx.ledgerJournal.count({ where: { transferId: t.id, kind: "FEES" } });
+      if (hasFees) {
+        await postJournal(tx, { kind: "FEES_REVERSAL", transferId: t.id, lines: feesJournal(oldA).map(l => ({ ...l, amountUsd: -l.amountUsd })) });
+        await postJournal(tx, { kind: "FEES", transferId: t.id, lines: feesJournal(newA) });
+      }
+      await tx.transfer.update({
+        where: { id: t.id },
+        data: {
+          route: asJson(next), alternates: asJson(alternates.filter(r => r.id !== next.id)), routeIndex: { increment: 1 },
+          partnerCostUsd: newCost, markupUsd: newMarkup, status: "FUNDS_DETECTED", statusReason: `FAILOVER from ${failedPartner}: ${reason}`,
+        },
+      });
+    });
+    return dispatchPayout(t.id);
+  }
+
+  // No alternative: fail and reverse everything booked so far (partner refunds the sender).
+  return db.$transaction(async tx => {
+    // Reverse the NET position of the transfer in one journal (earlier fee re-bookings from failovers are already included).
+    const net = await transferBalances(tx, t.id);
+    const reversal: JournalLine[] = Object.entries(net)
+      .filter(([, v]) => v !== 0n)
+      .map(([account, v]) => ({ account: account as JournalLine["account"], amountUsd: -v }));
+    if (reversal.length >= 2) await postJournal(tx, { kind: "FAILURE_REVERSAL", transferId: t.id, lines: reversal });
+    const failed = await tx.transfer.update({ where: { id: t.id }, data: { status: "FAILED", statusReason: reason } });
+    await tx.auditLog.create({ data: { action: "transfer.failed", resourceType: "Transfer", resourceId: t.id, organizationId: t.organizationId, metadata: { reason } } });
+    return failed;
+  }).then(async failed => {
+    await emitWebhookEvent({ organizationId: failed.organizationId, event: "transfer.failed", data: { transfer_id: failed.id, reason } });
+    return failed;
+  });
+}
+
+async function onPayoutCompleted(transferId: string, efiraRef?: string | null): Promise<Transfer> {
+  const t = await db.transfer.findUniqueOrThrow({ where: { id: transferId } });
+  if (t.status === "COMPLETED") return t;
+  if (t.status !== "PAYING_OUT") return t;
+  const a = amountsFromBreakdown(Number(t.sourceAmountUsd) / 100, Number(t.partnerCostUsd) / 100, Number(t.markupUsd) / 100);
+  const done = await db.$transaction(async tx => {
+    for (const j of lines(...payoutJournals(a))) await postJournal(tx, { kind: "PAYOUT", transferId: t.id, lines: j });
+    if (t.invoiceId) {
+      await tx.invoice.updateMany({ where: { id: t.invoiceId, status: { not: "PAID" } }, data: { status: "PAID", paidAt: new Date() } });
+    }
+    return tx.transfer.update({ where: { id: t.id }, data: { status: "COMPLETED", completedAt: new Date(), efiraRef: efiraRef ?? t.efiraRef, statusReason: null } });
+  });
+  await emitWebhookEvent({ organizationId: t.organizationId, event: "transfer.completed", data: { transfer_id: t.id, efira_ref: done.efiraRef } });
+  if (t.invoiceId) await emitWebhookEvent({ organizationId: t.organizationId, event: "invoice.paid", data: { invoice_id: t.invoiceId, transfer_id: t.id } });
+  return done;
+}
+
+// ── Staff review of held transfers ───────────────────────────────────────────────
+
+export async function reviewTransfer(transferId: string, decision: "RELEASE" | "REJECT", note?: string): Promise<Transfer> {
+  const t = await db.transfer.findUniqueOrThrow({ where: { id: transferId } });
+  if (t.status !== "QUARANTINED") throw new ServiceError("INVALID_STATE", "Transfer is not on hold", 409);
+  const funded = Boolean((t.fundingInstructions as { fundsConfirmed?: boolean } | null)?.fundsConfirmed);
+  await db.auditLog.create({ data: { action: `transfer.review.${decision.toLowerCase()}`, resourceType: "Transfer", resourceId: t.id, organizationId: t.organizationId, metadata: { note: note ?? null } } });
+  if (decision === "REJECT") {
+    // Funds (if any) are returned to the sender by the partner; nothing was booked in the memo ledger yet.
+    return db.transfer.update({ where: { id: t.id }, data: { status: "CANCELLED", statusReason: `REJECTED: ${note ?? "by staff"}` } });
+  }
+  if (!funded) throw new ServiceError("NO_FUNDS", "Cannot release: funds not confirmed by the partner", 409);
+  return onFundsConfirmed(t.id, {});
+}
+
+/** Customer supplies missing documents (purpose code / invoice) for a held transfer. */
+export async function attachDocuments(orgId: string, transferId: string, docs: { purposeCode?: string; invoiceId?: string }): Promise<Transfer> {
+  const t = await db.transfer.findFirst({ where: { id: transferId, organizationId: orgId }, include: { sender: true, recipient: true } });
+  if (!t) throw new ServiceError("NOT_FOUND", "Transfer not found", 404);
+  if (t.status !== "QUARANTINED" && t.status !== "AWAITING_FUNDS" && t.status !== "PENDING_VERIFICATION") {
+    throw new ServiceError("INVALID_STATE", "Documents can only be attached before the payout starts", 409);
+  }
+  if (docs.invoiceId) {
+    const inv = await db.invoice.findFirst({ where: { id: docs.invoiceId, organizationId: orgId } });
+    if (!inv) throw new ServiceError("NOT_FOUND", "Invoice not found", 404, { param: "invoice_id" });
+  }
+  const route = t.route as unknown as Route;
+  const rates = await getRateTable(["INR"]).catch(() => ({ INR: undefined as unknown as number }));
+  const ctx = await buildGuardContext({
+    kind: t.kind, sender: t.sender, recipient: t.recipient, route, fundingMethod: t.fundingMethod,
+    amountUsd: Number(t.sourceAmountUsd) / 100, inrPerUsd: rates.INR, excludeTransferId: t.id,
+    purposeCode: docs.purposeCode ?? t.purposeCode, invoiceId: docs.invoiceId ?? t.invoiceId,
+  });
+  const g = evaluateTransfer(ctx);
+  const blocking = g.violations.filter(v => !VERIFICATION_ONLY.has(v.code));
+  const updated = await db.transfer.update({
+    where: { id: t.id },
+    data: { purposeCode: docs.purposeCode ?? t.purposeCode, invoiceId: docs.invoiceId ?? t.invoiceId },
+  });
+  if (blocking.length) throw new ServiceError("GUARDRAIL_VIOLATION", "Still missing required information", 422, blocking);
+  const funded = Boolean((t.fundingInstructions as { fundsConfirmed?: boolean } | null)?.fundsConfirmed);
+  if (updated.status === "QUARANTINED" && funded && String(updated.statusReason).startsWith("DOCUMENTS_REQUIRED")) {
+    return onFundsConfirmed(updated.id, {});
+  }
+  return updated;
+}
+
+// ── Partner webhook events ───────────────────────────────────────────────────────
+
+export interface PartnerEventInput {
+  id: string;
+  type: string;
+  data: Record<string, unknown>;
+}
+
+export async function processPartnerEvent(partnerId: string, ev: PartnerEventInput): Promise<"processed" | "duplicate" | "ignored"> {
+  try {
+    await db.partnerEvent.create({ data: { partner: partnerId, externalId: ev.id, type: ev.type, payload: asJson(ev.data) } });
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") return "duplicate";
+    throw e;
+  }
+  try {
+    const handled = await routeEvent(partnerId, ev);
+    await db.partnerEvent.update({ where: { partner_externalId: { partner: partnerId, externalId: ev.id } }, data: { processedAt: new Date() } });
+    return handled ? "processed" : "ignored";
+  } catch (e) {
+    // Let the partner retry: remove the idempotency record so the redelivery is processed again.
+    await db.partnerEvent.delete({ where: { partner_externalId: { partner: partnerId, externalId: ev.id } } }).catch(() => {});
+    throw e;
+  }
+}
+
+async function routeEvent(partnerId: string, ev: PartnerEventInput): Promise<boolean> {
+  const d = ev.data as Record<string, any>;
+  switch (ev.type) {
+    case "deposit.detected": {
+      const dep = await db.stablecoinDeposit.findUnique({ where: { address: String(d.address) } });
+      if (!dep) return false;
+      await db.stablecoinDeposit.updateMany({ where: { id: dep.id, status: "AWAITING" }, data: { status: "DETECTED", txHash: d.tx_hash ?? null, confirmations: Number(d.confirmations ?? 0) } });
+      return true;
+    }
+    case "deposit.confirmed": {
+      const dep = await db.stablecoinDeposit.findUnique({ where: { address: String(d.address) } });
+      if (!dep) return false;
+      await db.stablecoinDeposit.update({ where: { id: dep.id }, data: { txHash: d.tx_hash ?? dep.txHash, confirmations: Number(d.confirmations ?? 1) } });
+      await onFundsConfirmed(dep.transferId, { receivedMicro: BigInt(String(d.amount_micro)), fromAddress: d.from_address, depositId: dep.id });
+      return true;
+    }
+    case "fiat.received": {
+      const t = await db.transfer.findUnique({ where: { id: String(d.reference) } });
+      if (!t || t.fundingMethod !== "FIAT_LOCAL") return false;
+      if (BigInt(String(d.amount)) < t.sourceAmount) {
+        await quarantine(t.id, "UNDERPAID: received less than the quoted amount; partner will refund or top up", true);
+        return true;
+      }
+      await onFundsConfirmed(t.id, {});
+      return true;
+    }
+    case "payout.completed": {
+      const t = await db.transfer.findUnique({ where: { id: String(d.transfer_id) } });
+      if (!t) return false;
+      await onPayoutCompleted(t.id, d.efira_ref ?? null);
+      return true;
+    }
+    case "payout.failed": {
+      const t = await db.transfer.findUnique({ where: { id: String(d.transfer_id) } });
+      if (!t || t.status !== "PAYING_OUT") return false;
+      await handlePayoutFailure(t.id, String(d.reason ?? "partner payout failed"));
+      return true;
+    }
+    case "virtual_account.credit":
+      return onVirtualAccountCredit(partnerId, d);
+    default:
+      return false;
+  }
+}
+
+async function onVirtualAccountCredit(partnerId: string, d: Record<string, any>): Promise<boolean> {
+  const va = await db.virtualAccount.findUnique({ where: { partner_partnerRef: { partner: partnerId, partnerRef: String(d.partner_ref) } }, include: { entity: true } });
+  if (!va) return false;
+  const amount = Number(d.amount);
+  const currency = String(d.currency ?? va.currency);
+  const rule = va.sweepRule as { destCurrency: string; recipientEntityId?: string; defaultPurposeCode?: string };
+
+  // Payer is recorded as a counterparty entity owned by the account holder's organization.
+  const payer = await db.entity.create({
+    data: {
+      legalName: String(d.sender_name ?? "Unknown payer"), country: String(d.sender_country ?? va.country), currency,
+      entityType: va.entity.entityType, organizationId: va.organizationId,
+      // The partner screened the payer when crediting the account; Vaulte records their assertion.
+      verificationStatus: d.payer_verified ? "APPROVED" : "NOT_STARTED", isVerified: Boolean(d.payer_verified),
+      isSandbox: va.entity.isSandbox,
+    },
+  });
+  const recipientId = rule.recipientEntityId ?? va.entityId;
+  const input: QuoteInput = {
+    kind: va.entity.entityType === "INDIVIDUAL" ? "PERSONAL" : "BUSINESS", senderEntityId: payer.id, recipientEntityId: recipientId,
+    sourceCurrency: currency, destCurrency: rule.destCurrency, sourceAmount: amount, fundingMethod: "VIRTUAL_ACCOUNT", prefer: "balanced",
+  };
+  const sanctions = await screenEntity(payer.legalName, payer.country);
+  let held: string | null = sanctions.cleared ? null : `SANCTIONS_REVIEW: payer ${payer.legalName} matched screening`;
+
+  let built: BuiltQuote;
+  try {
+    built = await evaluateQuote(va.organizationId, input, { ignoreGuardrails: true });
+  } catch (e) {
+    throw e; // no route / pricing problem: surface to the partner for retry/manual handling
+  }
+  const route = built.chosen;
+  const ctx = await buildGuardContext({
+    kind: input.kind, sender: payer, recipient: built.recipient, route, fundingMethod: "VIRTUAL_ACCOUNT",
+    amountUsd: built.sourceAmountUsd, inrPerUsd: built.breakdown.destCurrency === "INR" ? built.breakdown.midRateDestPerUsd : undefined,
+    purposeCode: rule.defaultPurposeCode ?? null, invoiceId: null,
+  });
+  const guard = evaluateTransfer(ctx);
+  if (!held && guard.violations.length) {
+    const codes = guard.violations.map(v => v.code);
+    const docs = codes.every(c => c === "INVOICE_REQUIRED" || c === "PURPOSE_CODE_REQUIRED");
+    held = docs ? `DOCUMENTS_REQUIRED: ${codes.join(",")}` : `GUARDRAIL: ${codes.join(",")}`;
+  }
+
+  const alternates = pickAlternates(built.routes, route);
+  const quote = await db.quote.create({
+    data: {
+      expiresAt: new Date(Date.now() + QUOTE_TTL_SEC * 1000), status: "USED", kind: input.kind,
+      senderEntityId: payer.id, recipientEntityId: recipientId, originCountry: payer.country, destCountry: built.recipient.country,
+      sourceCurrency: currency, destCurrency: rule.destCurrency, sourceAmount: BigInt(amount), destAmount: BigInt(built.destAmountMinor),
+      fundingMethod: "VIRTUAL_ACCOUNT", route: asJson(route), alternates: asJson(alternates), breakdown: asJson(built.breakdown),
+      organizationId: va.organizationId,
+    },
+  });
+  const partnerCostUsd = cents(built.breakdown.partnerCostUsd);
+  const markupUsd = cents(built.breakdown.markupUsd);
+  const transfer = await db.transfer.create({
+    data: {
+      kind: input.kind, status: "AWAITING_FUNDS", fundingMethod: "VIRTUAL_ACCOUNT", isSandbox: va.entity.isSandbox,
+      originCountry: payer.country, destCountry: built.recipient.country, sourceCurrency: currency, destCurrency: rule.destCurrency,
+      sourceAmount: BigInt(amount), destAmount: BigInt(built.destAmountMinor), sourceAmountUsd: cents(built.breakdown.sourceAmountUsd),
+      markupBps: built.breakdown.markupBps, markupUsd, partnerCostUsd, quotedFeesUsd: partnerCostUsd + markupUsd,
+      token: route.token, chain: route.chain, route: asJson(route), alternates: asJson(alternates),
+      purposeCode: rule.defaultPurposeCode ?? null, organizationId: va.organizationId, quoteId: quote.id,
+      senderEntityId: payer.id, recipientEntityId: recipientId,
+      fundingInstructions: asJson({ type: "VIRTUAL_ACCOUNT", virtual_account_id: va.id, reference: d.reference ?? null }),
+    },
+  });
+  await emitWebhookEvent({ organizationId: va.organizationId, event: "virtual_account.credited", data: { virtual_account_id: va.id, transfer_id: transfer.id, amount, currency } });
+  if (held) {
+    await quarantine(transfer.id, held, true);
+    return true;
+  }
+  await onFundsConfirmed(transfer.id, {});
+  return true;
+}
+
+/**
+ * Quote so that the RECIPIENT receives (about) a fixed destination amount: used for invoice payments,
+ * where the payer must cover fees. Iterates the forward quote a few times (fees depend on the amount).
+ */
+export async function createQuoteForDestination(
+  orgId: string,
+  input: Omit<QuoteInput, "sourceAmount"> & { destAmount: number },
+) {
+  const rates = await getRateTable([input.sourceCurrency, input.destCurrency]).catch(e => {
+    throw new ServiceError("UNSUPPORTED_CURRENCY", e instanceof Error ? e.message : "Rate unavailable", 422);
+  });
+  let source = Math.ceil(fromUsd(toUsd(input.destAmount, input.destCurrency, rates), input.sourceCurrency, rates) * 100) / 100;
+  let sourceMinor = Math.ceil(source * 100);
+  for (let i = 0; i < 4; i++) {
+    const q = await evaluateQuote(orgId, { ...input, sourceAmount: sourceMinor });
+    const short = input.destAmount - q.destAmountMinor;
+    if (short <= 0 && short > -Math.max(2, Math.round(input.destAmount * 0.0005))) break;
+    // scale the source amount by the observed shortfall (in source currency)
+    const shortSource = (short / input.destAmount) * sourceMinor;
+    sourceMinor = Math.max(1, Math.ceil(sourceMinor + shortSource + 1));
+  }
+  return createQuote(orgId, { ...input, sourceAmount: sourceMinor });
+}
+
+// ── Public serialisation ─────────────────────────────────────────────────────────
+
+export function serializeTransfer(t: Transfer & { deposits?: Array<{ status: string; txHash: string | null; confirmations: number }> }) {
+  const route = t.route as unknown as Route;
+  return {
+    id: t.id,
+    status: t.status,
+    status_reason: t.statusReason,
+    kind: t.kind,
+    sandbox: t.isSandbox,
+    source: { currency: t.sourceCurrency, amount: Number(t.sourceAmount), country: t.originCountry },
+    destination: { currency: t.destCurrency, amount: Number(t.destAmount), country: t.destCountry },
+    funding_method: t.fundingMethod,
+    funding_instructions: t.fundingInstructions ?? null,
+    route: summariseRoute(route),
+    fees: { markup_bps: t.markupBps, vaulte_markup_usd: Number(t.markupUsd) / 100, partner_cost_usd: Number(t.partnerCostUsd) / 100 },
+    purpose_code: t.purposeCode,
+    invoice_id: t.invoiceId,
+    efira_ref: t.efiraRef,
+    external_ref: t.externalRef,
+    deposit: t.deposits?.[0] ?? null,
+    created_at: t.createdAt.toISOString(),
+    completed_at: t.completedAt?.toISOString() ?? null,
+    note: "Vaulte does not hold funds. The licensed partner receives, converts and pays out.",
+  };
+}

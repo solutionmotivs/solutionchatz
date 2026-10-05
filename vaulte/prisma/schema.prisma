@@ -1,0 +1,689 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PaymentStatus {
+  DRAFT
+  PENDING_COMPLIANCE
+  COMPLIANCE_CLEARED
+  PROCESSING
+  SETTLED
+  FAILED
+  CANCELLED
+  RECALLED
+}
+
+enum PaymentRail {
+  SWIFT_GPI
+  SEPA_INSTANT
+  SEPA_CREDIT
+  ACH_SAME_DAY
+  ACH_STANDARD
+  FEDNOW
+  UPI
+  RTGS
+  NEFT
+  AUTO
+}
+
+enum KYBStatus {
+  NOT_STARTED
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  NEEDS_MORE_INFO
+}
+
+enum RiskTier {
+  LOW
+  MEDIUM
+  HIGH
+  BLOCKED
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum WebhookEventType {
+  PAYMENT_CREATED
+  PAYMENT_SETTLED
+  PAYMENT_FAILED
+  PAYMENT_CANCELLED
+  INVOICE_CREATED
+  INVOICE_PAID
+  KYB_APPROVED
+  KYB_REJECTED
+  COMPLIANCE_FLAGGED
+  FX_RATE_UPDATED
+  TRANSFER_CREATED
+  TRANSFER_FUNDED
+  TRANSFER_COMPLETED
+  TRANSFER_FAILED
+  VIRTUAL_ACCOUNT_CREDITED
+}
+
+enum TransferKind {
+  BUSINESS
+  PERSONAL
+}
+
+enum FundingMethod {
+  STABLECOIN
+  FIAT_LOCAL
+  VIRTUAL_ACCOUNT
+}
+
+enum TransferStatus {
+  PENDING_VERIFICATION
+  AWAITING_FUNDS
+  FUNDS_DETECTED
+  PAYING_OUT
+  COMPLETED
+  FAILED
+  EXPIRED
+  CANCELLED
+  QUARANTINED
+}
+
+enum DepositStatus {
+  AWAITING
+  DETECTED
+  CONFIRMED
+  UNDERPAID
+  EXPIRED
+}
+
+enum QuoteStatus {
+  ACTIVE
+  USED
+  EXPIRED
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  FINANCE
+  DEVELOPER
+  READ_ONLY
+}
+
+enum OnboardingStep {
+  COMPANY_DETAILS
+  ADD_ENTITY
+  FIRST_PAYMENT
+  KYB_SUBMIT
+  GO_LIVE
+}
+
+enum PlanId {
+  FREE
+  GROWTH
+  SCALE
+  ENTERPRISE
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  name    String
+  slug    String  @unique
+  logoUrl String?
+
+  legalName          String?
+  registrationNumber String?
+  taxId              String?
+  country            String?
+  businessType       String?
+  incorporationDate  DateTime?
+  website            String?
+  kybStatus          KYBStatus @default(NOT_STARTED)
+  kybSubmittedAt     DateTime?
+  kybApprovedAt      DateTime?
+  riskTier           RiskTier  @default(MEDIUM)
+  riskScore          Int?
+
+  dailyLimitUsd   BigInt @default(10000000)
+  monthlyLimitUsd BigInt @default(500000000)
+
+  planId        PlanId    @default(FREE)
+  planExpiresAt DateTime?
+
+  sandboxEnabled        Boolean        @default(true)
+  onboardingStep        OnboardingStep @default(COMPANY_DETAILS)
+  onboardingDone        Boolean        @default(false)
+  poweredByEnabled      Boolean        @default(true)
+  currentMonthVolumeUsd BigInt         @default(0)
+  volumeResetAt         DateTime?
+
+  users           User[]
+  entities        Entity[]
+  apiKeys         ApiKey[]
+  payments        Payment[]
+  invoices        Invoice[]
+  webhooks        WebhookEndpoint[]
+  ubos            UBO[]
+  auditLogs       AuditLog[]
+  transfers       Transfer[]
+  quotes          Quote[]
+  virtualAccounts VirtualAccount[]
+
+  @@index([slug])
+  @@index([kybStatus])
+}
+
+model User {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  email        String    @unique
+  passwordHash String
+  name         String
+  role         UserRole  @default(FINANCE)
+  lastLoginAt  DateTime?
+  mfaEnabled   Boolean   @default(false)
+  mfaSecret    String?
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  sessions  Session[]
+  auditLogs AuditLog[]
+
+  @@index([email])
+  @@index([organizationId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  userAgent String?
+  ipAddress String?
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model UBO {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  name           String
+  nationality    String?
+  ownershipPct   Float
+  idDocumentUrl  String?
+  sanctionsCheck Boolean   @default(false)
+  pepCheck       Boolean   @default(false)
+  verifiedAt     DateTime?
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+model Entity {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  legalName      String
+  country        String
+  currency       String
+  registrationNo String?
+  taxId          String?
+  isVerified     Boolean @default(false)
+  isSandbox      Boolean @default(false)
+
+  // BUSINESS (KYB) or INDIVIDUAL (KYC). Verification itself is done by the licensed partner;
+  // Vaulte only stores the resulting status.
+  entityType         String    @default("BUSINESS")
+  verificationStatus KYBStatus @default(NOT_STARTED)
+  verificationRef    String?
+  // Set from the partner's KYC result (needed for LRS). Vaulte never stores the PAN itself.
+  panVerified        Boolean   @default(false)
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  bankAccounts      BankAccount[]
+  virtualAccounts   VirtualAccount[]
+  sentTransfers     Transfer[]       @relation("TransferSender")
+  receivedTransfers Transfer[]       @relation("TransferRecipient")
+  sentPayments      Payment[]        @relation("SenderEntity")
+  receivedPayments  Payment[]        @relation("RecipientEntity")
+
+  @@index([organizationId])
+}
+
+model BankAccount {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  alias       String?
+  accountName String
+  currency    String
+  country     String
+
+  iban          String?
+  swiftBic      String?
+  accountNumber String?
+  routingNumber String?
+  sortCode      String?
+  ifsc          String?
+  upiId         String?
+
+  isVerified Boolean   @default(false)
+  verifiedAt DateTime?
+  isSandbox  Boolean   @default(false)
+
+  entityId String
+  entity   Entity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+
+  payments Payment[]
+
+  @@index([entityId])
+}
+
+model Payment {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  amount     BigInt
+  amountUsd  BigInt?
+  currency   String
+  fxRate     Float?  @default(1.0)
+  feeAmount  BigInt?
+  networkFee BigInt?
+
+  rail         PaymentRail   @default(AUTO)
+  railSelected PaymentRail?
+  status       PaymentStatus @default(DRAFT)
+  isSandbox    Boolean       @default(false)
+
+  invoiceId      String?
+  idempotencyKey String? @unique
+  externalRef    String?
+  description    String?
+  metadata       Json?
+
+  complianceCleared Boolean @default(false)
+  sanctionsHit      Boolean @default(false)
+  complianceNotes   String?
+
+  processedAt      DateTime?
+  settledAt        DateTime?
+  failedAt         DateTime?
+  cancelledAt      DateTime?
+  estimatedArrival DateTime?
+
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id])
+  senderEntityId    String
+  senderEntity      Entity       @relation("SenderEntity", fields: [senderEntityId], references: [id])
+  recipientEntityId String
+  recipientEntity   Entity       @relation("RecipientEntity", fields: [recipientEntityId], references: [id])
+  bankAccountId     String?
+  bankAccount       BankAccount? @relation(fields: [bankAccountId], references: [id])
+  invoice           Invoice?     @relation(fields: [invoiceId], references: [id])
+
+  webhookEvents WebhookEvent[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([idempotencyKey])
+}
+
+model Invoice {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  number      String
+  publicToken String        @unique @default(cuid())
+  status      InvoiceStatus @default(DRAFT)
+  currency    String
+  subtotal    BigInt
+  taxAmount   BigInt        @default(0)
+  totalAmount BigInt
+  dueDate     DateTime?
+  paidAt      DateTime?
+  // RBI purpose code (e.g. P0802) when the invoice is an India export of services
+  purposeCode String?
+  notes       String?
+
+  recipientEmail String?
+  recipientName  String?
+  emailSentAt    DateTime?
+  viewCount      Int       @default(0)
+
+  issuerEntityId String?
+  payerEntityId  String?
+
+  lineItems InvoiceLineItem[]
+  payments  Payment[]
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, number])
+  @@index([organizationId])
+  @@index([status])
+  @@index([publicToken])
+}
+
+model InvoiceLineItem {
+  id          String @id @default(cuid())
+  description String
+  quantity    Float
+  unitPrice   BigInt
+  taxRate     Float  @default(0)
+  total       BigInt
+
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+}
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+
+  name      String
+  keyHash   String   @unique
+  keyPrefix String
+  isLive    Boolean  @default(false)
+  scopes    String[] @default(["payments:read", "payments:write"])
+  rateLimit Int      @default(2000)
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+model WebhookEndpoint {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  url           String
+  secret        String
+  events        String[]
+  isActive      Boolean   @default(true)
+  failureCount  Int       @default(0)
+  lastAttemptAt DateTime?
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  deliveries WebhookEvent[]
+
+  @@index([organizationId])
+}
+
+model WebhookEvent {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  eventType     WebhookEventType
+  payload       Json
+  attempts      Int              @default(0)
+  delivered     Boolean          @default(false)
+  deliveredAt   DateTime?
+  lastError     String?
+  nextAttemptAt DateTime?
+
+  endpointId String
+  endpoint   WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  paymentId  String?
+  payment    Payment?        @relation(fields: [paymentId], references: [id])
+
+  @@index([endpointId])
+  @@index([delivered, nextAttemptAt])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  action       String
+  resourceType String?
+  resourceId   String?
+  metadata     Json?
+  ipAddress    String?
+  userAgent    String?
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  userId         String?
+  user           User?        @relation(fields: [userId], references: [id])
+
+  @@index([organizationId])
+  @@index([createdAt])
+}
+
+model FxRate {
+  id        String   @id @default(cuid())
+  updatedAt DateTime @updatedAt
+
+  base     String
+  target   String
+  midRate  Float
+  buyRate  Float
+  sellRate Float
+  source   String @default("openexchangerates")
+
+  @@unique([base, target])
+  @@index([base])
+}
+
+model EmailLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  to         String
+  subject    String
+  template   String
+  status     String  @default("sent")
+  externalId String?
+
+  organizationId String?
+
+  @@index([organizationId])
+  @@index([to])
+}
+
+// ─── CROSS-BORDER TRANSFERS (stablecoin / fiat, partner-held funds) ───────────────
+// Vaulte never holds funds. Everything below is routing metadata and a memo ledger.
+
+model Quote {
+  id        String      @id @default(cuid())
+  createdAt DateTime    @default(now())
+  expiresAt DateTime
+  status    QuoteStatus @default(ACTIVE)
+
+  kind              TransferKind
+  senderEntityId    String
+  recipientEntityId String
+  originCountry     String
+  destCountry       String
+  sourceCurrency    String
+  destCurrency      String
+  sourceAmount      BigInt // minor units
+  destAmount        BigInt // minor units, firm for the quote TTL
+  fundingMethod     FundingMethod
+  prefer            String        @default("balanced")
+
+  route      Json // chosen route legs
+  alternates Json // ranked fallback routes
+  breakdown  Json // landed-cost split: mid rate, partner spread, network fee, Vaulte markup
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  transfers      Transfer[]
+
+  @@index([organizationId])
+  @@index([status, expiresAt])
+}
+
+model Transfer {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  kind          TransferKind
+  status        TransferStatus @default(AWAITING_FUNDS)
+  statusReason  String?
+  fundingMethod FundingMethod
+  isSandbox     Boolean        @default(true)
+
+  originCountry   String
+  destCountry     String
+  sourceCurrency  String
+  destCurrency    String
+  sourceAmount    BigInt
+  destAmount      BigInt
+  sourceAmountUsd BigInt // valuation in USD cents, used by the memo ledger and limits
+  markupBps       Int
+  markupUsd       BigInt // Vaulte markup in USD cents
+  partnerCostUsd  BigInt // partner fees + spread in USD cents
+
+  token               String? // USDC | USDT when stablecoin is used
+  chain               String?
+  route               Json
+  alternates          Json
+  routeIndex          Int     @default(0)
+  // How the sender pays: stablecoin deposit address or partner bank details, issued by the partner.
+  fundingInstructions Json?
+  // Total fee shown to the customer at quote time (USD cents); fixed even if routing fails over.
+  quotedFeesUsd       BigInt  @default(0)
+
+  purposeCode    String?
+  invoiceId      String?
+  idempotencyKey String?   @unique
+  externalRef    String?
+  efiraRef       String?
+  description    String?
+  completedAt    DateTime?
+
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id])
+  quoteId           String
+  quote             Quote        @relation(fields: [quoteId], references: [id])
+  senderEntityId    String
+  sender            Entity       @relation("TransferSender", fields: [senderEntityId], references: [id])
+  recipientEntityId String
+  recipient         Entity       @relation("TransferRecipient", fields: [recipientEntityId], references: [id])
+
+  deposits StablecoinDeposit[]
+  journals LedgerJournal[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([recipientEntityId, createdAt])
+  @@index([senderEntityId, createdAt])
+}
+
+model StablecoinDeposit {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  partner        String
+  partnerRef     String?
+  token          String
+  chain          String
+  address        String        @unique
+  expectedAmount BigInt // token minor units (6 decimals for USDC/USDT)
+  receivedAmount BigInt?
+  txHash         String?
+  confirmations  Int           @default(0)
+  status         DepositStatus @default(AWAITING)
+  expiresAt      DateTime
+
+  transferId String
+  transfer   Transfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+
+  @@index([transferId])
+  @@index([status])
+}
+
+model VirtualAccount {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  partner        String
+  partnerRef     String
+  country        String
+  currency       String
+  details        Json // local bank details issued by the partner (IBAN, sort code, ACH, ...)
+  status         String  @default("ACTIVE")
+  // AUTO_SWEEP: every credit immediately triggers a transfer; no balance is retained.
+  sweepRule      Json
+  collectionOnly Boolean @default(true)
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  entityId       String
+  entity         Entity       @relation(fields: [entityId], references: [id])
+
+  @@unique([partner, partnerRef])
+  @@unique([entityId, country, currency])
+  @@index([organizationId])
+}
+
+model LedgerJournal {
+  id         String        @id @default(cuid())
+  createdAt  DateTime      @default(now())
+  kind       String
+  memo       String?
+  transferId String?
+  transfer   Transfer?     @relation(fields: [transferId], references: [id])
+  entries    LedgerEntry[]
+
+  @@index([transferId])
+}
+
+// Memo ledger valued in USD cents. Debits positive, credits negative; entries of a journal sum to zero.
+model LedgerEntry {
+  id        String        @id @default(cuid())
+  account   String
+  amountUsd BigInt
+  journalId String
+  journal   LedgerJournal @relation(fields: [journalId], references: [id], onDelete: Cascade)
+
+  @@index([account])
+  @@index([journalId])
+}
+
+model PartnerEvent {
+  id          String    @id @default(cuid())
+  createdAt   DateTime  @default(now())
+  partner     String
+  externalId  String
+  type        String
+  payload     Json
+  processedAt DateTime?
+  error       String?
+
+  @@unique([partner, externalId])
+}
