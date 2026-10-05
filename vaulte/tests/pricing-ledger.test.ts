@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildBreakdown, markupBpsFor, validateMargin, MIN_MARGIN_BPS } from "@/lib/pricing";
 import { findRoutes, rankRoutes } from "@/lib/routing/engine";
-import { amountsFromBreakdown, assertBalanced, feesJournal, fundsReceivedJournal, payoutJournals, LedgerError } from "@/lib/ledger";
+
 
 const rates = { USD: 1, EUR: 0.92, INR: 83.42, AED: 3.6725, GBP: 0.785, SGD: 1.348 };
 
@@ -37,20 +37,3 @@ describe("pricing", () => {
   });
 });
 
-describe("memo ledger", () => {
-  it("rejects unbalanced journals", () => {
-    expect(() => assertBalanced([{ account: "PARTNER_HELD", amountUsd: 100n }, { account: "CUSTOMER_LIABILITY", amountUsd: -99n }])).toThrow(LedgerError);
-  });
-
-  it("a completed transfer nets customer liability to zero and leaves markup owed", () => {
-    const a = amountsFromBreakdown(1000, 3.5, 3);
-    const lines = [fundsReceivedJournal(a), feesJournal(a), ...payoutJournals(a)];
-    lines.forEach(assertBalanced);
-    const bal: Record<string, bigint> = {};
-    for (const j of lines) for (const l of j) bal[l.account] = (bal[l.account] ?? 0n) + l.amountUsd;
-    expect(bal.CUSTOMER_LIABILITY).toBe(0n);
-    expect(bal.PARTNER_COST_PAYABLE).toBe(0n);
-    expect(bal.REV_MARKUP).toBe(-a.markupUsdCents);
-    expect(bal.PARTNER_HELD).toBe(a.markupUsdCents); // only Vaulte's own markup remains at the partner
-  });
-});

@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { verifyApiKey } from "@/lib/auth";
 import { apiError, apiSuccess } from "@/lib/utils";
 import { serializeTransfer } from "@/lib/stablecoin/service";
-import { transferBalances } from "@/lib/ledger";
+import { transferNet } from "@/lib/ledger/transfers";
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const auth = await verifyApiKey(req.headers.get("authorization"));
@@ -13,9 +13,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     include: { deposits: { select: { status: true, txHash: true, confirmations: true } } },
   });
   if (!t) return apiError("NOT_FOUND", "Transfer not found", 404);
-  const bal = await transferBalances(db, t.id);
+  const bal = await transferNet(db, t.id);
   return apiSuccess({
     ...serializeTransfer(t),
-    memo_ledger_usd_cents: Object.fromEntries(Object.entries(bal).map(([k, v]) => [k, Number(v)])),
+    ledger_net_minor_units: Object.fromEntries(Object.entries(bal).map(([k, v]) => [k, Number(v)])),
   });
 }

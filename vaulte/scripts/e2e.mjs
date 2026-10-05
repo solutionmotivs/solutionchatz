@@ -71,15 +71,19 @@ async function verify(id, extra = {}) {
 }
 const sim = (key, body) => api("/api/sandbox/partner/simulate", { method: "POST", key, body });
 async function balances(transferId) {
-  const entries = await db.ledgerEntry.findMany({ where: { journal: { transferId } } });
+  // net USD value per account code across every journal of the transfer
+  const entries = await db.glEntry.findMany({ where: { journal: { transferId } }, include: { account: true } });
   const out = {};
-  for (const e of entries) out[e.account] = (out[e.account] ?? 0n) + e.amountUsd;
+  for (const e of entries) out[e.account.code] = (out[e.account.code] ?? 0n) + e.baseUsdCents;
   return out;
 }
 
 async function main() {
   await db.rateLimit.deleteMany(); // local runs share one IP; start each run with clean limits
   await db.webhookEvent.deleteMany(); // leftovers from earlier runs would crowd the worker batch
+  // Test database only: the ledger is append-only by design, so a fresh e2e run empties it with TRUNCATE (which the row triggers do not intercept).
+  await db.$executeRawUnsafe('TRUNCATE "GlEntry","GlJournal","GlPeriod","GlChain" CASCADE');
+  await db.reconLine.deleteMany(); await db.reconBatch.deleteMany();
   // A small fixture list so sanctions behaviour is testable offline (the official lists are loaded by the sync job).
   const FIXTURE_ADDR = "0x" + "e2ecafe".padEnd(39, "0") + "1";
   await db.sanctionsAddress.deleteMany({ where: { list: "E2E_FIXTURE" } });
@@ -264,9 +268,9 @@ async function main() {
   const done = await api(`/api/stablecoin/payins/${t.json.id}`, { key: A.key });
   check("bank certificate reference recorded", /^EFIRA-/.test(done.json?.efira_ref ?? ""));
   const bal = await balances(t.json.id);
-  check("memo ledger: customer liability nets to zero", (bal.CUSTOMER_LIABILITY ?? 0n) === 0n, String(bal.CUSTOMER_LIABILITY));
-  check("memo ledger: markup recorded as revenue", (bal.REV_MARKUP ?? 0n) < 0n);
-  check("memo ledger: sums to zero", Object.values(bal).reduce((a, b) => a + b, 0n) === 0n);
+  check("ledger: customer obligations (memo 9200) net to zero", (bal["9200"] ?? 0n) === 0n, String(bal["9200"]));
+  check("ledger: markup recorded as revenue (4000) and due from partner (1100)", (bal["4000"] ?? 0n) < 0n && (bal["1100"] ?? 0n) === -(bal["4000"] ?? 0n));
+  check("ledger: transfer journals sum to zero", Object.values(bal).reduce((a, b) => a + b, 0n) === 0n);
   check("invoice marked paid", (await db.invoice.findUnique({ where: { id: inv.json.id } })).status === "PAID");
 
   console.log("== Guardrails");
@@ -306,7 +310,7 @@ async function main() {
   check("customer keeps the quoted amount after failover", after.destAmount === before.destAmount);
   await sim(A.key, { event: "payout.completed", transfer_id: f1 });
   const bf = await balances(f1);
-  check("ledger balanced after failover + completion", Object.values(bf).reduce((a, b) => a + b, 0n) === 0n && (bf.CUSTOMER_LIABILITY ?? 0n) === 0n);
+  check("ledger balanced after failover + completion", Object.values(bf).reduce((a, b) => a + b, 0n) === 0n && (bf["9200"] ?? 0n) === 0n);
 
   let f2 = await freshTransfer();
   let last;
@@ -347,7 +351,7 @@ async function main() {
   const vdone = await sim(A.key, { event: "payout.completed", transfer_id: vt.id });
   check("virtual-account sweep completes", vdone.json?.transfer_status === "COMPLETED", JSON.stringify(vdone.json));
   const vb = await balances(vt.id);
-  check("virtual-account ledger balanced, nothing retained", Object.values(vb).reduce((a, b) => a + b, 0n) === 0n && (vb.CUSTOMER_LIABILITY ?? 0n) === 0n);
+  check("virtual-account ledger balanced, nothing retained", Object.values(vb).reduce((a, b) => a + b, 0n) === 0n && (vb["9200"] ?? 0n) === 0n);
 
   console.log("== Personal lane (US -> India, MTSS limits)");
   const pSender = await entity(A.key, "Priya US", "US", "USD", "INDIVIDUAL");
@@ -634,6 +638,91 @@ async function main() {
       const bal = await balances(trId);
       check("ledger balances to zero for the Airwallex transfer", Object.values(bal).reduce((a, b) => a + b, 0n) === 0n);
     }
+  }
+
+  console.log("== General ledger");
+  {
+    const jr = await api("/api/admin/ledger/journals?limit=200", { jar: staffJar });
+    check("customers cannot read the ledger", (await api("/api/admin/ledger/reports", { jar: A.jar })).status === 403);
+    const tb = (await api("/api/admin/ledger/reports?type=trial_balance", { jar: staffJar })).json;
+    check("the trial balance balances in USD and in every currency", tb.totals.balanced === true && tb.totals.baseDebit === tb.totals.baseCredit && BigInt(tb.totals.baseDebit) > 0n, JSON.stringify(tb.totals).slice(0, 300));
+    check("accounts carry type, class and memo flag", tb.rows.some(r => r.code === "4000" && r.type === "REVENUE" && r.isMemo === false) && tb.rows.some(r => r.code === "9200" && r.isMemo === true));
+    check("every posted journal is hash-chained and verifiable", (await api("/api/admin/ledger/verify", { jar: staffJar })).json?.chain?.ok === true);
+    const verify1 = (await api("/api/admin/ledger/verify", { jar: staffJar })).json;
+    check("database guards are installed", verify1.database_guards_installed === true);
+    const bs = (await api("/api/admin/ledger/reports?type=balance_sheet", { jar: staffJar })).json;
+    check("balance sheet: assets = liabilities + equity (memo customer money excluded)", bs.balanced === true && !JSON.stringify(bs).includes("MEMO"));
+    const memo = (await api("/api/admin/ledger/reports?type=memo", { jar: staffJar })).json;
+    check("customer money held by partners is shown only in the memo schedule", memo.rows.every(r => r.isMemo) && memo.rows.length > 0);
+    const inc = (await api("/api/admin/ledger/reports?type=income_statement&from=2000-01-01", { jar: staffJar })).json;
+    check("income statement shows markup revenue", BigInt(inc.totalRevenue) > 0n && inc.revenue.some(s => s.accounts.some(a => a.code === "4000")), JSON.stringify(inc).slice(0, 200));
+    const csv = await fetch(`${BASE}/api/admin/ledger/reports?type=trial_balance&format=csv`, { headers: { Cookie: staffJar.cookie } });
+    check("reports export as CSV for the accountant", csv.status === 200 && (await csv.text()).startsWith("account,name,type,memo,currency"));
+    const gl = (await api("/api/admin/ledger/reports?type=general_ledger&account=4000&from=2000-01-01", { jar: staffJar })).json;
+    check("the general ledger lists entries with a running balance", gl.rows.length > 0 && BigInt(gl.rows.at(-1).balance) < 0n);
+
+    // Immutability and balance are enforced by the database itself
+    let upd = ""; try { await db.$executeRawUnsafe('UPDATE "GlEntry" SET "amountMinor" = 1 WHERE id = (SELECT id FROM "GlEntry" LIMIT 1)'); } catch (e) { upd = String(e.message); }
+    check("a ledger row cannot be updated, even with direct SQL", /append-only/.test(upd), upd.slice(0, 120));
+    let del = ""; try { await db.$executeRawUnsafe('DELETE FROM "GlJournal" WHERE id = (SELECT id FROM "GlJournal" LIMIT 1)'); } catch (e) { del = String(e.message); }
+    check("a journal cannot be deleted", /append-only/.test(del));
+    let unbal = ""; try {
+      await db.$transaction(async tx => {
+        const acct = await tx.glAccount.findFirst({ where: { code: "1000" } });
+        const last = await tx.glJournal.findFirst({ orderBy: { seq: "desc" } });
+        const j = await tx.glJournal.create({ data: { seq: last.seq + 1000, entryDate: new Date(), periodId: last.periodId, kind: "BAD", source: "SYSTEM", prevHash: "x", hash: "y" + Date.now() } });
+        await tx.glEntry.create({ data: { journalId: j.id, accountId: acct.id, currency: "USD", amountMinor: 100n, baseUsdCents: 100n } });
+      });
+    } catch (e) { unbal = String(e.message); }
+    check("an unbalanced journal is rejected by the database itself", /does not balance/.test(unbal), unbal.slice(0, 160));
+
+    // Manual journals
+    const mj = (body) => api("/api/admin/ledger/journals", { method: "POST", jar: staffJar, body });
+    check("a manual journal needs a reason", (await mj({ memo: "short", lines: [{ account: "1000", currency: "USD", side: "DEBIT", amount: "10" }, { account: "4900", currency: "USD", side: "CREDIT", amount: "10" }] })).status === 400);
+    check("an unbalanced manual journal is refused", (await mj({ memo: "Unbalanced test entry", lines: [{ account: "1000", currency: "USD", side: "DEBIT", amount: "10" }, { account: "4900", currency: "USD", side: "CREDIT", amount: "9.99" }] })).status === 422);
+    check("memorandum accounts cannot be posted manually", (await mj({ memo: "Try posting to memo account", lines: [{ account: "9100", currency: "USD", side: "DEBIT", amount: "10" }, { account: "4900", currency: "USD", side: "CREDIT", amount: "10" }] })).status === 422);
+    check("a multi-currency journal needs a balancing line in each currency", (await mj({ memo: "EUR bank receipt, not balanced in EUR", lines: [{ account: "1000", currency: "EUR", side: "DEBIT", amount: "100" }, { account: "4900", currency: "USD", side: "CREDIT", amount: "108" }] })).status === 422);
+    const eurRcpt = await mj({ memo: "Partner remitted EUR 250.00 markup to the EUR bank account", lines: [{ account: "1000", currency: "EUR", side: "DEBIT", amount: "250.00" }, { account: "1100", currency: "EUR", side: "CREDIT", amount: "250.00" }], idempotency_key: `rcpt-${uniq}` });
+    check("a foreign-currency journal posts with its USD value", eurRcpt.status === 201, JSON.stringify(eurRcpt.json));
+    const dupe = await mj({ memo: "Partner remitted EUR 250.00 markup to the EUR bank account", lines: [{ account: "1000", currency: "EUR", side: "DEBIT", amount: "250.00" }, { account: "1100", currency: "EUR", side: "CREDIT", amount: "250.00" }], idempotency_key: `rcpt-${uniq}` });
+    check("the same idempotency key does not post twice", dupe.status === 201 && dupe.json.id === eurRcpt.json.id);
+    const rev = await api(`/api/admin/ledger/journals/${eurRcpt.json.id}/reverse`, { method: "POST", jar: staffJar, body: { memo: "Posted to the wrong account, reversing" } });
+    check("a journal is corrected by a reversing journal, never edited", rev.status === 201 && rev.json.reversal_of === eurRcpt.json.id);
+    check("a journal can be reversed only once", (await api(`/api/admin/ledger/journals/${eurRcpt.json.id}/reverse`, { method: "POST", jar: staffJar, body: { memo: "Second attempt to reverse" } })).status === 422);
+    const tb2 = (await api("/api/admin/ledger/reports?type=trial_balance", { jar: staffJar })).json;
+    check("the trial balance still balances after manual and reversing entries", tb2.totals.balanced === true);
+
+    // Periods
+    const old = await mj({ memo: "Opening balance entry for the January period", date: "2026-01-15T12:00:00Z", lines: [{ account: "1000", currency: "USD", side: "DEBIT", amount: "5000" }, { account: "3000", currency: "USD", side: "CREDIT", amount: "5000" }] });
+    check("a past-dated journal lands in its own period", old.status === 201);
+    check("the current period cannot be closed before it ends", (await api("/api/admin/ledger/periods", { method: "POST", jar: staffJar, body: { period_id: new Date().toISOString().slice(0, 7) } })).status === 409);
+    const close = await api("/api/admin/ledger/periods", { method: "POST", jar: staffJar, body: { period_id: "2026-01" } });
+    check("a finished period can be closed, with a hashed snapshot", close.status === 200 && close.json.status === "CLOSED" && /^[0-9a-f]{64}$/.test(close.json.snapshot_hash), JSON.stringify(close.json));
+    const late = await mj({ memo: "Late entry into a closed period", date: "2026-01-20T00:00:00Z", lines: [{ account: "1000", currency: "USD", side: "DEBIT", amount: "1" }, { account: "4900", currency: "USD", side: "CREDIT", amount: "1" }] });
+    check("posting into a closed period is refused", late.status === 422 && /closed/.test(late.json.error.message));
+
+    // Customer statements
+    const st = await api("/api/statements?from=2000-01-01", { key: A.key });
+    check("a customer can fetch their own statement (API key)", st.status === 200 && st.json.lines.length > 0 && st.json.lines.every(l => l.currency));
+    const stJar = await api("/api/statements?from=2000-01-01&format=csv", { jar: A.jar });
+    check("another organization's postings never appear on a statement", (await api("/api/statements?from=2000-01-01", { key: B.key })).json.lines.every(l => !st.json.lines.some(x => x.reference === l.reference)));
+
+    // Reconciliation
+    const done = await db.transfer.findFirst({ where: { status: "COMPLETED", externalRef: { not: null } }, orderBy: { createdAt: "desc" } });
+    const rc = await api("/api/admin/recon", { method: "POST", jar: staffJar, body: { partner: "mock_in_pacb", label: `stmt-${uniq}`, lines: [
+      { direction: "PAYOUT", reference: done.externalRef, currency: done.destCurrency, amount: (Number(done.destAmount) / 100).toFixed(2) },
+      { direction: "PAYOUT", reference: "UNKNOWN-REF-1", currency: "INR", amount: "100.00" },
+      { direction: "PAYOUT", reference: done.id, currency: done.destCurrency, amount: ((Number(done.destAmount) + 500) / 100).toFixed(2) },
+    ] } });
+    check("a partner statement is auto-matched: one match, one mismatch, one unknown", rc.status === 201 && rc.json.matched === 1 && rc.json.mismatched === 1 && rc.json.unmatched === 1, JSON.stringify(rc.json));
+    const ex = (await api("/api/admin/recon?status=exceptions", { jar: staffJar })).json;
+    check("exceptions are queued for staff", ex.data.length >= 2 && ex.data.every(l => ["UNMATCHED", "AMOUNT_MISMATCH"].includes(l.status)));
+    const csvRc = await api("/api/admin/recon", { method: "POST", jar: staffJar, body: { partner: "mock_in_pacb", csv: `direction,reference,currency,amount\nFUNDING,${done.id},${done.sourceCurrency},${(Number(done.sourceAmount) / 100).toFixed(2)}\n` } });
+    check("statements can be imported as CSV", csvRc.status === 201 && csvRc.json.matched === 1, JSON.stringify(csvRc.json));
+    const ex1 = ex.data.find(l => l.status === "UNMATCHED");
+    check("an exception can only be closed with an explanation", (await api(`/api/admin/recon/lines/${ex1.id}`, { method: "POST", jar: staffJar, body: { note: "ok" } })).status === 400);
+    check("staff can resolve an exception", (await api(`/api/admin/recon/lines/${ex1.id}`, { method: "POST", jar: staffJar, body: { note: "Partner fee line, booked through manual journal" } })).json?.status === "RESOLVED");
+    check("the final ledger chain is intact", (await api("/api/admin/ledger/verify", { jar: staffJar })).json?.chain?.ok === true);
   }
 
   console.log("== Webhooks");

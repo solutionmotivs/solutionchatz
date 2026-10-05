@@ -606,7 +606,6 @@ model Transfer {
   recipient         Entity       @relation("TransferRecipient", fields: [recipientEntityId], references: [id])
 
   deposits StablecoinDeposit[]
-  journals LedgerJournal[]
 
   @@index([organizationId])
   @@index([status])
@@ -660,30 +659,6 @@ model VirtualAccount {
   @@unique([partner, partnerRef])
   @@unique([entityId, country, currency])
   @@index([organizationId])
-}
-
-model LedgerJournal {
-  id         String        @id @default(cuid())
-  createdAt  DateTime      @default(now())
-  kind       String
-  memo       String?
-  transferId String?
-  transfer   Transfer?     @relation(fields: [transferId], references: [id])
-  entries    LedgerEntry[]
-
-  @@index([transferId])
-}
-
-// Memo ledger valued in USD cents. Debits positive, credits negative; entries of a journal sum to zero.
-model LedgerEntry {
-  id        String        @id @default(cuid())
-  account   String
-  amountUsd BigInt
-  journalId String
-  journal   LedgerJournal @relation(fields: [journalId], references: [id], onDelete: Cascade)
-
-  @@index([account])
-  @@index([journalId])
 }
 
 model PartnerEvent {
@@ -931,4 +906,119 @@ model ScreeningCheck {
   @@index([status, result])
   @@index([organizationId])
   @@index([subjectType, subjectId])
+}
+
+// ── General ledger (double-entry, multi-currency, append-only) ──
+// Debits are positive, credits negative. Each journal balances per currency AND in USD (base). Rows can never be
+// updated or deleted (database triggers); corrections are new reversing journals. Journals are hash-chained.
+model GlAccount {
+  id            String    @id @default(cuid())
+  createdAt     DateTime  @default(now())
+  code          String    @unique
+  name          String
+  /// ASSET | LIABILITY | EQUITY | REVENUE | EXPENSE
+  type          String
+  /// DEBIT | CREDIT
+  normalBalance String
+  /// Reporting class, e.g. CURRENT_ASSET, CURRENT_LIABILITY, OPERATING_REVENUE, COST_OF_REVENUE, OPERATING_EXPENSE, MEMO_CUSTODY
+  class         String
+  /// Memorandum accounts track customer money held by partners. They are NOT Vaulte's assets or liabilities and stay off the balance sheet.
+  isMemo        Boolean   @default(false)
+  active        Boolean   @default(true)
+  description   String?
+  entries       GlEntry[]
+}
+
+model GlPeriod {
+  id           String      @id // YYYY-MM
+  startsOn     DateTime
+  endsOn       DateTime
+  status       String      @default("OPEN") // OPEN | CLOSED
+  closedAt     DateTime?
+  closedById   String?
+  snapshot     Json?
+  snapshotHash String?
+  journals     GlJournal[]
+}
+
+model GlJournal {
+  id             String    @id @default(cuid())
+  seq            Int       @unique
+  createdAt      DateTime  @default(now())
+  entryDate      DateTime
+  periodId       String
+  period         GlPeriod  @relation(fields: [periodId], references: [id])
+  kind           String
+  source         String // TRANSFER | MANUAL | RECON | SYSTEM
+  memo           String?
+  transferId     String?
+  organizationId String?
+  reversalOfId   String?   @unique
+  idempotencyKey String?   @unique
+  createdById    String?
+  prevHash       String
+  hash           String
+  entries        GlEntry[]
+
+  @@index([transferId])
+  @@index([organizationId])
+  @@index([periodId])
+  @@index([kind])
+}
+
+model GlEntry {
+  id             String    @id @default(cuid())
+  journalId      String
+  journal        GlJournal @relation(fields: [journalId], references: [id])
+  accountId      String
+  account        GlAccount @relation(fields: [accountId], references: [id])
+  currency       String
+  amountMinor    BigInt
+  baseUsdCents   BigInt
+  /// Customer dimension for per-customer statements.
+  organizationId String?
+
+  @@index([journalId])
+  @@index([accountId, currency])
+  @@index([organizationId])
+}
+
+model GlChain {
+  id       Int    @id
+  lastSeq  Int    @default(0)
+  lastHash String @default("GENESIS")
+}
+
+// ── Partner statement reconciliation ──
+model ReconBatch {
+  id         String      @id @default(cuid())
+  createdAt  DateTime    @default(now())
+  partner    String
+  label      String?
+  uploadedBy String?
+  lines      ReconLine[]
+}
+
+model ReconLine {
+  id            String     @id @default(cuid())
+  batchId       String
+  batch         ReconBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  /// FUNDING | PAYOUT | FEE | OTHER
+  direction     String
+  reference     String
+  currency      String
+  amountMinor   BigInt
+  occurredOn    DateTime?
+  description   String?
+  /// MATCHED | AMOUNT_MISMATCH | UNMATCHED | RESOLVED
+  status        String     @default("UNMATCHED")
+  transferId    String?
+  expectedMinor BigInt?
+  note          String?
+  resolvedById  String?
+  resolvedAt    DateTime?
+
+  @@index([batchId])
+  @@index([status])
+  @@index([transferId])
 }

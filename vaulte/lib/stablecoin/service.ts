@@ -14,9 +14,7 @@ import { buildBreakdown, fromUsd, markupBpsFor, toUsd, validateMargin } from "@/
 import { buildLiveLegs, summariseFx, type LiveLegs } from "@/lib/fx/aggregator";
 import { MOCK_LEGS } from "@/lib/routing/catalog";
 import { findRoutes, nextRoute, pickAlternates, rankRoutes, routeCostUsd } from "@/lib/routing/engine";
-import {
-  amountsFromBreakdown, feesJournal, fundsReceivedJournal, payoutJournals, postJournal, transferBalances, type JournalLine,
-} from "@/lib/ledger";
+import { bookFailureReversal, bookFundsReceived, bookPayout, finFromTransfer, rebookRevenue } from "@/lib/ledger/transfers";
 import { getPartner } from "@/lib/psp/stablecoin/registry";
 import { emitWebhookEvent } from "@/lib/webhooks/dispatch";
 import type {
@@ -398,10 +396,6 @@ export async function activatePendingTransfers(entityId: string): Promise<number
 
 // ── Funds received, payout, completion, failover ─────────────────────────────────
 
-function lines(...j: JournalLine[][]) {
-  return j;
-}
-
 /** Called when the partner confirms the sender's money arrived. Runs checks, books the ledger, starts the payout. */
 async function onFundsConfirmed(transferId: string, opts: { receivedMicro?: bigint; fromAddress?: string; depositId?: string }) {
   const t = await db.transfer.findUniqueOrThrow({ where: { id: transferId } });
@@ -420,11 +414,9 @@ async function onFundsConfirmed(transferId: string, opts: { receivedMicro?: bigi
     await db.stablecoinDeposit.update({ where: { id: dep.id }, data: { status: "CONFIRMED", receivedAmount: opts.receivedMicro } });
   }
 
-  const a = amountsFromBreakdown(Number(t.sourceAmountUsd) / 100, Number(t.partnerCostUsd) / 100, Number(t.markupUsd) / 100);
   await db.$transaction(async tx => {
     await tx.transfer.update({ where: { id: t.id }, data: { status: "FUNDS_DETECTED", statusReason: null } });
-    await postJournal(tx, { kind: "FUNDS_RECEIVED", transferId: t.id, lines: fundsReceivedJournal(a) });
-    await postJournal(tx, { kind: "FEES", transferId: t.id, lines: feesJournal(a) });
+    await bookFundsReceived(tx, finFromTransfer(t));
   });
   await emitWebhookEvent({ organizationId: t.organizationId, event: "transfer.funded", data: { transfer_id: t.id } });
   return dispatchPayout(t.id);
@@ -480,14 +472,8 @@ export async function handlePayoutFailure(transferId: string, reason: string): P
     const oldCost = t.partnerCostUsd;
     const newMarkup = t.quotedFeesUsd - newCost;
     await db.$transaction(async tx => {
-      // Re-book the fee split so the memo ledger matches reality: reverse old fee journal, post new one.
-      const oldA = { sourceUsdCents: t.sourceAmountUsd, partnerCostUsdCents: oldCost, markupUsdCents: oldMarkup };
-      const newA = { sourceUsdCents: t.sourceAmountUsd, partnerCostUsdCents: newCost, markupUsdCents: newMarkup };
-      const hasFees = await tx.ledgerJournal.count({ where: { transferId: t.id, kind: "FEES" } });
-      if (hasFees) {
-        await postJournal(tx, { kind: "FEES_REVERSAL", transferId: t.id, lines: feesJournal(oldA).map(l => ({ ...l, amountUsd: -l.amountUsd })) });
-        await postJournal(tx, { kind: "FEES", transferId: t.id, lines: feesJournal(newA) });
-      }
+      // Re-book the fee split so Vaulte's revenue matches reality (total fees charged to the customer are unchanged).
+      await rebookRevenue(tx, finFromTransfer({ ...t, partnerCostUsd: newCost, markupUsd: newMarkup }));
       await tx.transfer.update({
         where: { id: t.id },
         data: {
@@ -502,11 +488,7 @@ export async function handlePayoutFailure(transferId: string, reason: string): P
   // No alternative: fail and reverse everything booked so far (partner refunds the sender).
   return db.$transaction(async tx => {
     // Reverse the NET position of the transfer in one journal (earlier fee re-bookings from failovers are already included).
-    const net = await transferBalances(tx, t.id);
-    const reversal: JournalLine[] = Object.entries(net)
-      .filter(([, v]) => v !== 0n)
-      .map(([account, v]) => ({ account: account as JournalLine["account"], amountUsd: -v }));
-    if (reversal.length >= 2) await postJournal(tx, { kind: "FAILURE_REVERSAL", transferId: t.id, lines: reversal });
+    await bookFailureReversal(tx, t);
     const failed = await tx.transfer.update({ where: { id: t.id }, data: { status: "FAILED", statusReason: reason } });
     await tx.auditLog.create({ data: { action: "transfer.failed", resourceType: "Transfer", resourceId: t.id, organizationId: t.organizationId, metadata: { reason } } });
     return failed;
@@ -520,9 +502,8 @@ async function onPayoutCompleted(transferId: string, efiraRef?: string | null): 
   const t = await db.transfer.findUniqueOrThrow({ where: { id: transferId } });
   if (t.status === "COMPLETED") return t;
   if (t.status !== "PAYING_OUT") return t;
-  const a = amountsFromBreakdown(Number(t.sourceAmountUsd) / 100, Number(t.partnerCostUsd) / 100, Number(t.markupUsd) / 100);
   const done = await db.$transaction(async tx => {
-    for (const j of lines(...payoutJournals(a))) await postJournal(tx, { kind: "PAYOUT", transferId: t.id, lines: j });
+    await bookPayout(tx, finFromTransfer(t));
     if (t.invoiceId) {
       await tx.invoice.updateMany({ where: { id: t.invoiceId, status: { not: "PAID" } }, data: { status: "PAID", paidAt: new Date() } });
     }
