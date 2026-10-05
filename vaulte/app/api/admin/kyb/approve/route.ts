@@ -2,7 +2,7 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { isAdminRequest } from "@/lib/admin-auth";
+import { requireStaff } from "@/lib/auth-guards";
 import { apiError, apiSuccess } from "@/lib/utils";
 import { emitWebhookEvent } from "@/lib/webhooks/dispatch";
 
@@ -14,7 +14,8 @@ const Schema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  if (!isAdminRequest(req)) return apiError("UNAUTHORIZED", "Admin token required", 401);
+  const staff = await requireStaff(req);
+  if (staff.response) return staff.response;
   let body: unknown;
   try { body = await req.json(); } catch { return apiError("INVALID_JSON", "Body must be JSON", 400); }
   const parsed = Schema.safeParse(body);
@@ -37,7 +38,7 @@ export async function POST(req: NextRequest) {
     },
   });
   await db.auditLog.create({
-    data: { action: `kyb.${d.decision.toLowerCase()}`, resourceType: "Organization", resourceId: org.id, metadata: { note: d.note ?? null }, organizationId: org.id },
+    data: { action: `kyb.${d.decision.toLowerCase()}`, resourceType: "Organization", resourceId: org.id, metadata: { note: d.note ?? null }, organizationId: org.id, userId: staff.user!.id },
   });
   if (d.decision === "APPROVED" || d.decision === "REJECTED") {
     await emitWebhookEvent({ organizationId: org.id, event: d.decision === "APPROVED" ? "kyb.approved" : "kyb.rejected", data: { organization_id: org.id } });

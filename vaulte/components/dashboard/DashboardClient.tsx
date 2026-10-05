@@ -89,6 +89,13 @@ export default function DashboardClient({ user, stats, recentPayments, org }: Pr
             <span className="text-gold text-sm">⇄</span>
             Transfers
           </a>
+          <a
+            href="/dashboard/profile"
+            className="w-full flex items-center gap-3 px-3 py-2.5 font-mono text-xs tracking-wider text-left transition-colors text-white/35 hover:text-white/60 hover:bg-white/4"
+          >
+            <span className="text-gold text-sm">☺</span>
+            Profile & security
+          </a>
         </nav>
 
         {/* User */}

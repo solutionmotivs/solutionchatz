@@ -179,6 +179,8 @@ model Organization {
   transfers       Transfer[]
   quotes          Quote[]
   virtualAccounts VirtualAccount[]
+  accountType     String            @default("BUSINESS") // BUSINESS (KYB) | INDIVIDUAL (KYC)
+  invites         Invite[]
 
   @@index([slug])
   @@index([kybStatus])
@@ -200,8 +202,24 @@ model User {
   organizationId String
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
-  sessions  Session[]
-  auditLogs AuditLog[]
+  sessions          Session[]
+  auditLogs         AuditLog[]
+  // ── Identity (M1) ──
+  emailVerifiedAt   DateTime?
+  status            String     @default("ACTIVE") // ACTIVE | SUSPENDED
+  isStaff           Boolean    @default(false)
+  phone             String?
+  jobTitle          String?
+  timezone          String     @default("UTC")
+  locale            String     @default("en")
+  failedLoginCount  Int        @default(0)
+  lockedUntil       DateTime?
+  passwordChangedAt DateTime?
+  mfaRecoveryHashes String[]   @default([])
+  mfaLastStep       Int        @default(0)
+  termsAcceptedAt   DateTime?
+  termsVersion      String?
+  marketingOptIn    Boolean    @default(false)
 
   @@index([email])
   @@index([organizationId])
@@ -214,8 +232,12 @@ model Session {
   userAgent String?
   ipAddress String?
 
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  revokedAt  DateTime?
+  lastSeenAt DateTime?
+  method     String    @default("PASSWORD") // PASSWORD | EMAIL_OTP | INVITE | SIGNUP
+  mfa        Boolean   @default(false)
 
   @@index([userId])
 }
@@ -686,4 +708,48 @@ model PartnerEvent {
   error       String?
 
   @@unique([partner, externalId])
+}
+
+// ─── IDENTITY: one-time codes, rate limits, invites ───────────────────────────────
+
+model OtpChallenge {
+  id          String    @id @default(cuid())
+  createdAt   DateTime  @default(now())
+  purpose     String // SIGNUP_VERIFY | LOGIN | PASSWORD_RESET | EMAIL_CHANGE | INVITE_ACCEPT
+  email       String // the address the code was sent to (lower case)
+  userId      String?
+  codeHash    String
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  ip          String?
+  payload     Json?
+
+  @@index([email, purpose, createdAt])
+  @@index([expiresAt])
+}
+
+// Atomic fixed-window counters for auth and other abuse-sensitive endpoints (shared across instances).
+model RateLimit {
+  key     String   @id
+  count   Int      @default(0)
+  resetAt DateTime
+}
+
+model Invite {
+  id              String    @id @default(cuid())
+  createdAt       DateTime  @default(now())
+  email           String
+  role            UserRole  @default(FINANCE)
+  tokenHash       String    @unique
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  invitedByUserId String
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([email])
 }

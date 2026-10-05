@@ -9,6 +9,11 @@ export interface EmailTemplate {
 
 const BASE_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://app.vaulte.io";
 
+/** Escape user-supplied text before putting it in HTML (prevents HTML/link injection in emails). */
+export function esc(v: unknown): string {
+  return String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
+}
+
 function wrap(content: string, preheader = ""): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -51,26 +56,72 @@ ${preheader ? `<div style="display:none;max-height:0;overflow:hidden;color:#F4F1
 }
 
 // ── 1. WELCOME EMAIL ──────────────────────────────────────────────────────────
-export function welcomeEmail(name: string, orgName: string, testApiKey: string): EmailTemplate {
+export function welcomeEmail(name: string, orgName: string): EmailTemplate {
   return {
-    subject: `Welcome to Vaulte — your sandbox is ready`,
+    subject: `Welcome to Vaulte`,
     html: wrap(`
-      <div class="badge">Account Created</div>
-      <h1>Welcome, ${name}.</h1>
-      <p>Your Vaulte sandbox is live. You can send test payments right now — no KYB required in sandbox mode.</p>
+      <div class="badge">Account Verified</div>
+      <h1>Welcome, ${esc(name)}.</h1>
+      <p>Your Vaulte sandbox is ready. You can try quotes and test transfers right now. Live payments unlock after verification by our licensed partners.</p>
       <a href="${BASE_URL}/dashboard" class="btn">Open Dashboard →</a>
-      <p style="font-size:12px;color:#8C9AAD;margin-bottom:8px">Your test API key:</p>
-      <div style="background:#0A0A0F;color:#C9A84C;font-size:11px;padding:14px 16px;word-break:break-all;margin-bottom:24px">${testApiKey}</div>
-      <p>Complete KYB verification to unlock live payments. Takes ~8 minutes.</p>
       <table class="details">
-        <tr><td>Organization</td><td>${orgName}</td></tr>
-        <tr><td>Sandbox</td><td>✓ Active</td></tr>
-        <tr><td>Live Payments</td><td>Pending KYB</td></tr>
-        <tr><td>First step</td><td>Send a test payment</td></tr>
+        <tr><td>Account</td><td>${esc(orgName)}</td></tr>
+        <tr><td>Sandbox</td><td>Active</td></tr>
+        <tr><td>Live payments</td><td>After verification</td></tr>
       </table>
-      <div class="meta">Store your API key securely. It will not be shown again in full. Questions? Reply to this email.</div>
-    `, `Welcome to Vaulte — your B2B payment sandbox is live`),
-    text: `Welcome to Vaulte, ${name}.\n\nYour sandbox is ready. Test API key: ${testApiKey}\n\nOpen dashboard: ${BASE_URL}/dashboard`,
+      <div class="meta">For your security we never email API keys. Create and manage keys in your dashboard.</div>
+    `, `Welcome to Vaulte`),
+    text: `Welcome to Vaulte, ${name}.\n\nYour sandbox is ready: ${BASE_URL}/dashboard\nFor your security we never email API keys.`,
+  };
+}
+
+// ── 1b. ONE-TIME CODE ─────────────────────────────────────────────────────────
+const OTP_LABELS: Record<string, string> = {
+  SIGNUP_VERIFY: "verify your email address",
+  LOGIN: "sign in to Vaulte",
+  PASSWORD_RESET: "reset your password",
+  EMAIL_CHANGE: "confirm your new email address",
+  INVITE_ACCEPT: "accept your invitation",
+};
+
+export function otpEmail(opts: { name?: string; code: string; purpose: string; minutes: number }): EmailTemplate {
+  const label = OTP_LABELS[opts.purpose] ?? "continue";
+  return {
+    subject: `${opts.code} is your Vaulte verification code`,
+    html: wrap(`
+      <h1>Your code</h1>
+      <p>${opts.name ? `Hi ${esc(opts.name)}, use` : "Use"} this code to ${label}:</p>
+      <div style="font-size:34px;letter-spacing:8px;background:#F4F1EB;padding:18px 0;text-align:center;margin:8px 0 20px">${esc(opts.code)}</div>
+      <p>It expires in ${opts.minutes} minutes and can be used once.</p>
+      <div class="meta">If you did not request this, ignore this email and do not share the code. Vaulte staff will never ask for it.</div>
+    `, `Your Vaulte code is ${opts.code}`),
+    text: `Your Vaulte code is ${opts.code}. Use it to ${label}. It expires in ${opts.minutes} minutes. If you did not request it, ignore this email. Never share this code.`,
+  };
+}
+
+export function securityNoticeEmail(opts: { name: string; event: string; detail?: string }): EmailTemplate {
+  return {
+    subject: `Security notice: ${opts.event}`,
+    html: wrap(`
+      <h1>Security notice</h1>
+      <p>Hi ${esc(opts.name)}, this is a notification about your account: <strong>${esc(opts.event)}</strong>.</p>
+      ${opts.detail ? `<p>${esc(opts.detail)}</p>` : ""}
+      <div class="meta">If this was not you, reset your password immediately at ${BASE_URL}/forgot-password and contact support.</div>
+    `, `Security notice: ${opts.event}`),
+    text: `Security notice: ${opts.event}. ${opts.detail ?? ""} If this was not you, reset your password at ${BASE_URL}/forgot-password.`,
+  };
+}
+
+export function inviteEmail(opts: { inviterName: string; orgName: string; role: string; acceptUrl: string }): EmailTemplate {
+  return {
+    subject: `${opts.inviterName} invited you to ${opts.orgName} on Vaulte`,
+    html: wrap(`
+      <h1>You are invited</h1>
+      <p>${esc(opts.inviterName)} invited you to join <strong>${esc(opts.orgName)}</strong> on Vaulte as <strong>${esc(opts.role)}</strong>.</p>
+      <a href="${opts.acceptUrl}" class="btn">Accept invitation →</a>
+      <div class="meta">This link expires in 7 days. If you were not expecting it, ignore this email.</div>
+    `, `Invitation to ${opts.orgName}`),
+    text: `${opts.inviterName} invited you to ${opts.orgName} on Vaulte as ${opts.role}. Accept: ${opts.acceptUrl} (expires in 7 days).`,
   };
 }
 
@@ -92,7 +143,7 @@ export function invoiceEmail(opts: {
 
   const itemRows = opts.lineItems.map(li => `
     <tr>
-      <td>${li.description} × ${li.quantity}</td>
+      <td>${esc(li.description)} × ${li.quantity}</td>
       <td>${new Intl.NumberFormat("en-US", { style: "currency", currency: opts.currency }).format(li.total / 100)}</td>
     </tr>
   `).join("");
@@ -102,15 +153,15 @@ export function invoiceEmail(opts: {
     html: wrap(`
       <div class="badge">Invoice Received</div>
       <h1>You have a new invoice.</h1>
-      <p>${opts.senderName} has sent you invoice <strong>${opts.invoiceNumber}</strong>.</p>
+      <p>${esc(opts.senderName)} has sent you invoice <strong>${esc(opts.invoiceNumber)}</strong>.</p>
       <div class="amount">${amountFormatted}</div>
-      ${opts.dueDate ? `<p style="font-size:12px;color:#8C9AAD">Due: ${opts.dueDate}</p>` : ""}
+      ${opts.dueDate ? `<p style="font-size:12px;color:#8C9AAD">Due: ${esc(opts.dueDate)}</p>` : ""}
       <a href="${opts.payUrl}" class="btn btn-gold">Pay Now →</a>
       <table class="details">
-        <tr><td>From</td><td>${opts.senderName}</td></tr>
-        <tr><td>Invoice #</td><td>${opts.invoiceNumber}</td></tr>
-        <tr><td>Currency</td><td>${opts.currency}</td></tr>
-        ${opts.dueDate ? `<tr><td>Due Date</td><td>${opts.dueDate}</td></tr>` : ""}
+        <tr><td>From</td><td>${esc(opts.senderName)}</td></tr>
+        <tr><td>Invoice #</td><td>${esc(opts.invoiceNumber)}</td></tr>
+        <tr><td>Currency</td><td>${esc(opts.currency)}</td></tr>
+        ${opts.dueDate ? `<tr><td>Due Date</td><td>${esc(opts.dueDate)}</td></tr>` : ""}
       </table>
       <table class="details" style="margin-top:16px">
         <tr><td colspan="2" style="color:#8C9AAD;font-size:10px;text-transform:uppercase;letter-spacing:0.1em;padding-bottom:8px">Line Items</td></tr>
@@ -120,7 +171,7 @@ export function invoiceEmail(opts: {
       <div class="meta">
         Click "Pay Now" to pay securely via Vaulte.${opts.poweredBy ? " Payments processed by <a href='https://vaulte.io' style='color:#C9A84C'>Vaulte</a> — B2B payment infrastructure." : ""}
       </div>
-    `, `Invoice ${opts.invoiceNumber} — ${amountFormatted} from ${opts.senderName}`),
+    `, `Invoice ${esc(opts.invoiceNumber)} — ${amountFormatted} from ${esc(opts.senderName)}`),
     text: `Invoice ${opts.invoiceNumber} from ${opts.senderName}\nAmount: ${amountFormatted}\nPay here: ${opts.payUrl}`,
   };
 }
@@ -145,17 +196,17 @@ export function paymentSettledEmail(opts: {
       <div class="badge">Payment Settled</div>
       <h1>Payment confirmed.</h1>
       <div class="amount">${amountFormatted}</div>
-      <p>Your payment to <strong>${opts.recipientName}</strong> has been settled successfully.</p>
+      <p>Your payment to <strong>${esc(opts.recipientName)}</strong> has been settled successfully.</p>
       <a href="${BASE_URL}/dashboard" class="btn">View in Dashboard →</a>
       <table class="details">
-        <tr><td>Payment ID</td><td>${opts.paymentId}</td></tr>
+        <tr><td>Payment ID</td><td>${esc(opts.paymentId)}</td></tr>
         <tr><td>Amount</td><td>${amountFormatted}</td></tr>
-        <tr><td>Recipient</td><td>${opts.recipientName}</td></tr>
-        <tr><td>Rail</td><td>${opts.rail}</td></tr>
-        <tr><td>Settled At</td><td>${opts.settledAt}</td></tr>
+        <tr><td>Recipient</td><td>${esc(opts.recipientName)}</td></tr>
+        <tr><td>Rail</td><td>${esc(opts.rail)}</td></tr>
+        <tr><td>Settled At</td><td>${esc(opts.settledAt)}</td></tr>
       </table>
       <div class="meta">This payment is final and irrevocable. Keep this email for your records.</div>
-    `, `Payment of ${amountFormatted} to ${opts.recipientName} has settled`),
+    `, `Payment of ${amountFormatted} to ${esc(opts.recipientName)} has settled`),
     text: `Payment settled: ${amountFormatted} to ${opts.recipientName}. Payment ID: ${opts.paymentId}`,
   };
 }
@@ -166,8 +217,8 @@ export function kybApprovedEmail(name: string, orgName: string): EmailTemplate {
     subject: `✓ KYB Approved — Live payments unlocked for ${orgName}`,
     html: wrap(`
       <div class="badge">KYB Approved</div>
-      <h1>You're live, ${name}.</h1>
-      <p>Your business verification is complete. Live payments are now unlocked for <strong>${orgName}</strong>.</p>
+      <h1>You're live, ${esc(name)}.</h1>
+      <p>Your business verification is complete. Live payments are now unlocked for <strong>${esc(orgName)}</strong>.</p>
       <p>You can now process real payments via SWIFT, SEPA, ACH, UPI and all supported rails.</p>
       <a href="${BASE_URL}/dashboard" class="btn btn-gold">Start Processing Payments →</a>
       <table class="details">
@@ -187,8 +238,8 @@ export function kybRejectedEmail(name: string, reason: string): EmailTemplate {
     subject: `KYB Review — Action required`,
     html: wrap(`
       <h1>KYB review update.</h1>
-      <p>Hi ${name}, we were unable to complete your business verification at this time.</p>
-      <p style="background:#FFF3CD;padding:12px 16px;border-left:3px solid #C9A84C;font-size:12px"><strong>Reason:</strong> ${reason}</p>
+      <p>Hi ${esc(name)}, we were unable to complete your business verification at this time.</p>
+      <p style="background:#FFF3CD;padding:12px 16px;border-left:3px solid #C9A84C;font-size:12px"><strong>Reason:</strong> ${esc(reason)}</p>
       <p>Please review the issue and resubmit your KYB application with corrected information.</p>
       <a href="${BASE_URL}/onboarding" class="btn">Resubmit KYB →</a>
       <div class="meta">If you believe this is an error, reply to this email with your company registration number.</div>
@@ -214,11 +265,11 @@ export function paymentFailedEmail(opts: {
     html: wrap(`
       <h1>Payment failed.</h1>
       <div class="amount" style="color:#C1121F">${amountFormatted}</div>
-      <p style="background:#FFF0F0;padding:12px 16px;border-left:3px solid #C1121F;font-size:12px"><strong>Reason:</strong> ${opts.reason}</p>
+      <p style="background:#FFF0F0;padding:12px 16px;border-left:3px solid #C1121F;font-size:12px"><strong>Reason:</strong> ${esc(opts.reason)}</p>
       <p>No funds have been debited. You can retry the payment from your dashboard.</p>
       <a href="${BASE_URL}/dashboard" class="btn">Retry Payment →</a>
       <table class="details">
-        <tr><td>Payment ID</td><td>${opts.paymentId}</td></tr>
+        <tr><td>Payment ID</td><td>${esc(opts.paymentId)}</td></tr>
         <tr><td>Amount</td><td>${amountFormatted}</td></tr>
         <tr><td>Status</td><td>Failed</td></tr>
       </table>

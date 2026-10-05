@@ -1,61 +1,34 @@
-import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { db } from "@/lib/db";
-import type { JWTPayload, AuthUser } from "@/types";
+import type { AuthUser } from "@/types";
+import { TOKEN_COOKIE, TOKEN_TTL_SECONDS, signSessionToken, verifyToken } from "@/lib/jwt";
 
-// Resolved lazily so `next build` works without env vars, but a production
-// server refuses to sign or verify tokens without a real secret.
-function getJwtSecret(): Uint8Array {
-  const secret = process.env.JWT_SECRET;
-  if (!secret || secret.length < 32) {
-    if (process.env.NODE_ENV === "production") {
-      throw new Error("JWT_SECRET must be set to at least 32 characters in production");
-    }
-    return new TextEncoder().encode("dev-only-secret-do-not-use-in-production-0000");
-  }
-  return new TextEncoder().encode(secret);
-}
+export { TOKEN_COOKIE, TOKEN_TTL_SECONDS, signSessionToken, verifyToken };
 
-export const TOKEN_COOKIE = "vaulte_session";
-export const TOKEN_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
+const TOUCH_INTERVAL_MS = 5 * 60 * 1000;
 
-export async function signToken(payload: Omit<JWTPayload, "iat" | "exp">) {
-  return new SignJWT(payload)
-    .setProtectedHeader({ alg: "HS256" })
-    .setIssuedAt()
-    .setExpirationTime(`${TOKEN_TTL_SECONDS}s`)
-    .sign(getJwtSecret());
-}
-
-export async function verifyToken(token: string): Promise<JWTPayload | null> {
-  try {
-    const { payload } = await jwtVerify(token, getJwtSecret());
-    return payload as unknown as JWTPayload;
-  } catch {
-    return null;
-  }
-}
-
+/**
+ * The signed-in user for the current browser request. The JWT only identifies a session; the session row is the
+ * source of truth, so sessions can be revoked and suspended users are locked out immediately.
+ */
 export async function getAuthUser(): Promise<AuthUser | null> {
   try {
-    const cookieStore = cookies();
-    const token = cookieStore.get(TOKEN_COOKIE)?.value;
+    const token = cookies().get(TOKEN_COOKIE)?.value;
     if (!token) return null;
-
     const payload = await verifyToken(token);
-    if (!payload) return null;
+    if (!payload?.sid) return null;
 
-    const user = await db.user.findUnique({
-      where: { id: payload.sub },
-      include: {
-        organization: {
-          select: { name: true, kybStatus: true },
-        },
-      },
+    const session = await db.session.findUnique({
+      where: { id: payload.sid },
+      include: { user: { include: { organization: { select: { name: true, kybStatus: true, accountType: true } } } } },
     });
+    if (!session || session.revokedAt || session.expiresAt.getTime() < Date.now()) return null;
+    const user = session.user;
+    if (user.id !== payload.sub || user.status !== "ACTIVE" || !user.emailVerifiedAt) return null;
 
-    if (!user) return null;
-
+    if (!session.lastSeenAt || Date.now() - session.lastSeenAt.getTime() > TOUCH_INTERVAL_MS) {
+      await db.session.update({ where: { id: session.id }, data: { lastSeenAt: new Date() } }).catch(() => {});
+    }
     return {
       id: user.id,
       name: user.name,
@@ -64,6 +37,11 @@ export async function getAuthUser(): Promise<AuthUser | null> {
       organizationId: user.organizationId,
       organizationName: user.organization.name,
       kybStatus: user.organization.kybStatus as AuthUser["kybStatus"],
+      sessionId: session.id,
+      isStaff: user.isStaff,
+      emailVerified: true,
+      totpEnabled: user.mfaEnabled,
+      accountType: user.organization.accountType === "INDIVIDUAL" ? "INDIVIDUAL" : "BUSINESS",
     };
   } catch {
     return null;

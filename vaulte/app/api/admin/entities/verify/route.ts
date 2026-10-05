@@ -2,7 +2,7 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { isAdminRequest } from "@/lib/admin-auth";
+import { requireStaff } from "@/lib/auth-guards";
 import { apiError, apiSuccess } from "@/lib/utils";
 import { activatePendingTransfers } from "@/lib/stablecoin/service";
 
@@ -14,7 +14,8 @@ const Schema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  if (!isAdminRequest(req)) return apiError("UNAUTHORIZED", "Admin token required", 401);
+  const staff = await requireStaff(req);
+  if (staff.response) return staff.response;
   let body: unknown;
   try { body = await req.json(); } catch { return apiError("INVALID_JSON", "Body must be JSON", 400); }
   const parsed = Schema.safeParse(body);

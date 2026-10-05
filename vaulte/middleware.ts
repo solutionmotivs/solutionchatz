@@ -1,9 +1,9 @@
 // middleware.ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { verifyToken, TOKEN_COOKIE } from "@/lib/auth";
+import { verifyToken, TOKEN_COOKIE } from "@/lib/jwt";
 
-const PUBLIC_PATHS = ["/", "/login", "/register", "/api/auth/login", "/api/auth/register"];
+const PUBLIC_PATHS = ["/", "/login", "/register", "/forgot-password", "/accept-invite", "/api/auth/login", "/api/auth/register"];
 const API_PATHS = ["/api/payments", "/api/invoices", "/api/kyb", "/api/fx", "/api/webhooks"];
 
 export async function middleware(req: NextRequest) {

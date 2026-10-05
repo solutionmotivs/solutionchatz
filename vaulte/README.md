@@ -37,13 +37,13 @@ tests/           vitest unit tests;  scripts/e2e.mjs  end-to-end run against a l
 ## Run locally
 ```bash
 npm install
-cp .env.example .env.local        # fill DATABASE_URL, JWT_SECRET, ADMIN_API_TOKEN, CRON_SECRET
+cp .env.example .env.local        # fill DATABASE_URL, JWT_SECRET, OTP_PEPPER, ENCRYPTION_KEY, CRON_SECRET
 npx prisma generate && npx prisma db push
 npm run dev
 ```
-Tests: `npm test` (unit) and, with the server running, `node scripts/e2e.mjs` (needs `DATABASE_URL`, `ADMIN_API_TOKEN`, `CRON_SECRET`, `BASE_URL`; run against `next dev` so loopback webhooks are allowed).
+Tests: `npm test` (unit) and, with the server running, `node scripts/e2e.mjs` (needs `DATABASE_URL`, `CRON_SECRET`, `MOCK_PARTNER_WEBHOOK_SECRET`, `BASE_URL`; start the server with `AUTH_EXPOSE_DEV_OTP=true` so the script can read emailed codes; run against `next dev` so loopback webhooks are allowed).
 
-Sandbox walk-through: register -> create entities -> `POST /api/admin/entities/verify` -> `POST /api/quotes` -> `POST /api/stablecoin/payins`
+Sandbox walk-through: register -> verify the emailed code -> create entities -> staff approves via `POST /api/admin/entities/verify` (staff session with two-factor) -> `POST /api/quotes` -> `POST /api/stablecoin/payins`
 -> `POST /api/sandbox/partner/simulate` (`deposit.confirmed`, then `payout.completed`) -> check `GET /api/stablecoin/payins/:id`.
 
 ## Before real money (not done; do not skip)
@@ -58,3 +58,9 @@ Sandbox walk-through: register -> create entities -> `POST /api/admin/entities/v
 6. Limits in `lib/guardrails` come from public summaries (Oct 2026). Confirm every number with counsel and the partners.
 
 `DEPLOY.md` has deployment notes.
+
+## Identity and access (M1)
+- Sign-up needs an emailed 6-digit code (HMAC-hashed, 10 min, 5 attempts). Sign-in by password or emailed code; optional TOTP two-factor with single-use recovery codes; sessions are server-side and revocable; accounts lock for 15 min after 5 failed passwords; rate limits are stored in the database.
+- Staff accounts (`isStaff`) must enable two-factor before any `/api/admin/*` route works. Create the first one with `node scripts/create-staff.mjs <email> <name>` and change the temporary password at first sign-in. `CRON_SECRET` is only for the cron endpoint.
+- Production needs `RESEND_API_KEY` (no email is faked in production), `OTP_PEPPER` and a 32-byte hex `ENCRYPTION_KEY`. `AUTH_EXPOSE_DEV_OTP` is ignored in production.
+- The legal pages under `/legal/*` are placeholders and must be replaced with counsel-approved text before launch.

@@ -140,6 +140,7 @@ export interface JWTPayload {
   sub: string;      // userId
   org: string;      // organizationId
   role: string;
+  sid: string;      // session id (revocable server-side)
   iat: number;
   exp: number;
 }
@@ -152,4 +153,9 @@ export interface AuthUser {
   organizationId: string;
   organizationName: string;
   kybStatus: KYBStatusType;
+  sessionId: string;
+  isStaff: boolean;
+  emailVerified: boolean;
+  totpEnabled: boolean;
+  accountType: "BUSINESS" | "INDIVIDUAL";
 }

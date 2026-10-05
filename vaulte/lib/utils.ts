@@ -122,7 +122,8 @@ export function apiError(
   code: string,
   message: string,
   status = 400,
-  param?: string
+  param?: string,
+  extra?: Record<string, unknown>
 ) {
   return Response.json(
     {
@@ -130,6 +131,7 @@ export function apiError(
         code,
         message,
         ...(param ? { param } : {}),
+        ...(extra ?? {}),
         doc_url: `https://docs.vaulte.io/errors/${code.toLowerCase()}`,
       },
     },

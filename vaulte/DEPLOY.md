@@ -4,7 +4,7 @@ Vaulte is a Next.js 14 app + PostgreSQL (Prisma). Everything runs in sandbox wit
 
 ## Environment
 Copy `.env.example`. Required: `DATABASE_URL`, `JWT_SECRET` (>= 32 chars), `NEXT_PUBLIC_APP_URL`.
-Required for specific endpoints: `ADMIN_API_TOKEN` (>= 24 chars) for `/api/admin/*`, `CRON_SECRET` for `/api/internal/webhooks/run`,
+Required for specific endpoints: staff accounts with two-factor for `/api/admin/*` (see `scripts/create-staff.mjs`), `CRON_SECRET` for `/api/internal/webhooks/run`,
 `MOCK_PARTNER_WEBHOOK_SECRET` if mock partners are enabled in production.
 
 ## Database
