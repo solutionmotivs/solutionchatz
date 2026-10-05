@@ -1,6 +1,7 @@
 // Orchestration for stablecoin / fiat cross-border transfers.
 // Vaulte never custodies funds: partners receive money, convert, and pay out. This service
 // picks routes, enforces guardrails, keeps the memo ledger, and reacts to partner events.
+import { onInvoicePaid as onEscrowInvoicePaid } from "@/lib/escrow/service";
 import { tierLimits } from "@/lib/kyc/risk";
 import { log } from "@/lib/log";
 import { Prisma, type Entity, type Transfer } from "@prisma/client";
@@ -536,6 +537,8 @@ async function onPayoutCompleted(transferId: string, efiraRef?: string | null): 
   if (t.invoiceId) {
     const inv = await db.invoice.findUnique({ where: { id: t.invoiceId }, select: { number: true, reference: true, source: true } });
     await emitWebhookEvent({ organizationId: t.organizationId, event: "invoice.paid", data: { invoice_id: t.invoiceId, transfer_id: t.id, number: inv?.number ?? null, reference: inv?.reference ?? null, source: inv?.source ?? null } });
+    // Milestone deals billed through this invoice move on (no-op for ordinary invoices).
+    await onEscrowInvoicePaid(t.invoiceId).catch(e => log("error", "escrow invoice hook failed", { error: e }));
   }
   return done;
 }

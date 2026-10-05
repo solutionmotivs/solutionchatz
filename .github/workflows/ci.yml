@@ -27,6 +27,7 @@ jobs:
       CRON_SECRET: ci-cron-secret-0123456789abcdef0123456789
       MOCK_PARTNER_WEBHOOK_SECRET: ci-mock-partner-secret-0123456789abcdef
       AUTH_EXPOSE_DEV_OTP: "true"
+      PAY_INTENT_RATE_LIMIT: "200"
       NEXT_PUBLIC_APP_URL: http://localhost:3055
       BASE_URL: http://localhost:3055
       AIRWALLEX_BASE_URL: http://127.0.0.1:39911

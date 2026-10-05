@@ -22,7 +22,7 @@ const Schema = z.object({
 const OPEN = ["PENDING_VERIFICATION", "AWAITING_FUNDS", "FUNDS_DETECTED", "PAYING_OUT", "QUARANTINED"] as const;
 
 export async function POST(req: NextRequest, { params }: { params: { token: string } }) {
-  if (!rateLimit(`pay-intent:${clientIp(req)}`, 8, 10 * 60 * 1000)) {
+  if (!rateLimit(`pay-intent:${clientIp(req)}`, Number(process.env.PAY_INTENT_RATE_LIMIT ?? 8), 10 * 60 * 1000)) {
     return apiError("RATE_LIMITED", "Too many attempts. Please try again later.", 429);
   }
   const body = await readJson(req);

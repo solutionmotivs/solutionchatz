@@ -41,3 +41,12 @@ describe("XML serializer", () => {
     expect(x).toContain("<Ctl>ab</Ctl>");
   });
 });
+
+import { getEscrowAgent, EscrowNotConfigured, MockEscrowAgent } from "../lib/escrow/agent";
+describe("escrow agent selection", () => {
+  it("test mode gets the sandbox agent; live mode fails closed without a licensed agent", () => {
+    expect(getEscrowAgent(true)).toBeInstanceOf(MockEscrowAgent);
+    expect(() => getEscrowAgent(false)).toThrow(EscrowNotConfigured);
+    expect(() => getEscrowAgent(false, "mock_escrow")).toThrow(EscrowNotConfigured);
+  });
+});

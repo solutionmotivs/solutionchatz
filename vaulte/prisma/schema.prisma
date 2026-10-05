@@ -1154,3 +1154,96 @@ model DocumentRequest {
   @@index([transferId, type])
   @@index([status, createdAt])
 }
+
+/// Milestone deal between a seller (a Vaulte customer) and a buyer. Two modes, neither of which lets Vaulte hold money:
+///  PARTNER_ESCROW  - a licensed escrow agent holds the funds; Vaulte orchestrates and instructs.
+///  PAY_ON_APPROVAL - nobody holds funds; each milestone is invoiced when the buyer approves it (milestone billing with an approval gate).
+model EscrowDeal {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  title              String
+  description        String?
+  terms              String
+  mode               String
+  /// DRAFT | AWAITING_BUYER | ACTIVE | COMPLETED | CANCELLED
+  status             String  @default("DRAFT")
+  currency           String
+  publicToken        String  @unique @default(cuid())
+  /// Days after a delivery is submitted before silence counts as approval (agreed up front in the terms shown to the buyer).
+  approvalWindowDays Int     @default(7)
+  /// RBI purpose code for the milestone invoices (required when the seller is an Indian business).
+  purposeCode        String?
+
+  organizationId String
+  sellerEntityId String
+  buyerName      String
+  buyerEmail     String
+  buyerCountry   String
+  /// CLEAR | REVIEW (sanctions screening of the buyer at creation)
+  buyerScreening String?
+
+  agent      String?
+  agentRef   String?
+  acceptedAt DateTime?
+
+  milestones EscrowMilestone[]
+  events     EscrowEvent[]
+
+  @@index([organizationId, status])
+}
+
+model EscrowMilestone {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  dealId      String
+  deal        EscrowDeal @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  seq         Int
+  title       String
+  description String?
+  amount      BigInt
+  /// UPFRONT (invoiced at acceptance) | ON_APPROVAL. Only meaningful in PAY_ON_APPROVAL mode.
+  payTiming   String     @default("ON_APPROVAL")
+  dueDate     DateTime?
+  /// PENDING | FUNDED | SUBMITTED | APPROVED | RELEASED | DISPUTED | REFUNDED | CANCELLED
+  status      String     @default("PENDING")
+
+  submissionNote String?
+  submittedAt    DateTime?
+  approvedAt     DateTime?
+  /// BUYER | SYSTEM (deemed approval) | STAFF (dispute resolution)
+  approvedBy     String?
+  releasedAt     DateTime?
+  invoiceId      String?
+  agentRef       String?
+
+  disputeReason   String?
+  disputeOpenedBy String?
+  disputeOpenedAt DateTime?
+  /// RELEASE | REFUND
+  resolution      String?
+  resolutionNote  String?
+  resolvedById    String?
+  resolvedAt      DateTime?
+
+  @@unique([dealId, seq])
+  @@index([status])
+  @@index([invoiceId])
+}
+
+model EscrowEvent {
+  id          String     @id @default(cuid())
+  createdAt   DateTime   @default(now())
+  dealId      String
+  deal        EscrowDeal @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  milestoneId String?
+  /// SELLER | BUYER | STAFF | SYSTEM | AGENT
+  actor       String
+  type        String
+  note        String?
+
+  @@index([dealId, createdAt])
+}
