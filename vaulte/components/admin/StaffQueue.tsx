@@ -15,7 +15,7 @@ export default function StaffQueue({ totpEnabled, name }: { totpEnabled: boolean
     api(`/api/admin/verification?status=${tab}`).then(r => { if (r.ok) setRows(r.data.data); else { setErr(r.error?.message ?? "Failed"); setRows([]); } });
   }, [tab]);
   return (
-    <Shell title="Compliance review queue" right={<><Link href="/admin/sanctions" className="text-gold hover:underline">Sanctions</Link><Link href="/admin/ledger" className="text-gold hover:underline">Ledger</Link></>}>
+    <Shell title="Compliance review queue" right={<><Link href="/admin/sanctions" className="text-gold hover:underline">Sanctions</Link><Link href="/admin/ledger" className="text-gold hover:underline">Ledger</Link><Link href="/admin/documents" className="text-gold hover:underline">Documents</Link></>}>
       <p className="text-[11px] text-mist mb-6">Signed in as {name}.{!totpEnabled && " Turn on two-factor authentication in Account → Security to open cases."}</p>
       <div className="flex gap-1 border-b border-ink/10 mb-6 overflow-x-auto">
         {TABS.map(([id, label]) => <button key={id} onClick={() => setTab(id)} className={`px-4 py-3 text-[11px] uppercase tracking-widest whitespace-nowrap ${tab === id ? "text-ink border-b-2 border-gold" : "text-mist hover:text-ink"}`}>{label}</button>)}

@@ -2,6 +2,7 @@
 // Usage: BASE_URL=http://localhost:3055 AUTH_EXPOSE_DEV_OTP=true CRON_SECRET=... MOCK_PARTNER_WEBHOOK_SECRET=... DATABASE_URL=... node scripts/e2e.mjs
 import { createHmac } from "node:crypto";
 import bcrypt from "bcryptjs";
+import { PDFDocument } from "pdf-lib";
 import http from "node:http";
 import { PrismaClient } from "@prisma/client";
 
@@ -723,6 +724,57 @@ async function main() {
     check("an exception can only be closed with an explanation", (await api(`/api/admin/recon/lines/${ex1.id}`, { method: "POST", jar: staffJar, body: { note: "ok" } })).status === 400);
     check("staff can resolve an exception", (await api(`/api/admin/recon/lines/${ex1.id}`, { method: "POST", jar: staffJar, body: { note: "Partner fee line, booked through manual journal" } })).json?.status === "RESOLVED");
     check("the final ledger chain is intact", (await api("/api/admin/ledger/verify", { jar: staffJar })).json?.chain?.ok === true);
+  }
+
+  console.log("== Documents and certificates");
+  {
+    const tIn = await db.transfer.findFirst({ where: { organizationId: A.orgId, status: "COMPLETED", destCountry: "IN", kind: "BUSINESS", efiraRef: { not: null } }, orderBy: { createdAt: "asc" } });
+    const list = await api(`/api/transfers/${tIn.id}/documents`, { key: A.key });
+    const ef = list.json.data.find(d => d.type === "EFIRA");
+    check("the partner's eFIRA reference was recorded as a document on completion", !!ef && ef.number === tIn.efiraRef && ef.source === "PARTNER" && ef.status === "VERIFIED" && ef.has_file === false, JSON.stringify(list.json.data));
+    check("the checklist shows purpose code, invoice and eFIRA present", list.json.checklist.filter(c => c.required).every(c => c.status === "PRESENT") && list.json.complete === true, JSON.stringify(list.json.checklist));
+    check("another organization cannot see the transfer's documents", (await api(`/api/transfers/${tIn.id}/documents`, { key: B.key })).status === 404);
+    const mkPdf = async (label) => { const d = await PDFDocument.create(); d.addPage([300, 200]).drawText(label); return Buffer.from(await d.save()); };
+    const up = async (jar, fields, file, name = "cert.pdf") => { const fd = new FormData(); for (const [k, v] of Object.entries(fields)) fd.set(k, v); if (file) fd.set("file", new Blob([file]), name); const r = await fetch(`${BASE}/api/documents`, { method: "POST", headers: { Cookie: jar.cookie }, body: fd }); return { status: r.status, json: await r.json().catch(() => null) }; };
+    const pdf1 = await mkPdf("eBRC certificate " + uniq);
+    const ebrc = await up(A.jar, { type: "EBRC", transfer_id: tIn.id, number: `EBRC-${uniq}`, issuer: "HDFC Bank", issued_on: "2026-10-01", edpms_ref: "EDPMS-123" }, pdf1);
+    check("a customer can upload an eBRC with its number and references", ebrc.status === 201 && ebrc.json.status === "RECEIVED" && ebrc.json.refs.edpms_ref === "EDPMS-123" && /^[0-9a-f]{64}$/.test(ebrc.json.sha256), JSON.stringify(ebrc.json));
+    check("a script disguised as a PDF is refused (judged by content)", (await up(A.jar, { type: "OTHER", transfer_id: tIn.id }, Buffer.from("<script>x</script>"), "a.pdf")).status === 415);
+    check("an unknown document type is refused", (await up(A.jar, { type: "WHATEVER", transfer_id: tIn.id, number: "1" })).status === 400);
+    check("a document needs a file or a number", (await up(A.jar, { type: "BANK_CERT", transfer_id: tIn.id })).status === 400);
+    check("documents cannot be attached to another organization's transfer", (await up(B.jar, { type: "BANK_CERT", transfer_id: tIn.id, number: "X1" })).status === 404);
+    check("the stored file is encrypted at rest", !(await (await import("node:fs/promises")).readFile(`${process.cwd()}/.data/uploads/${(await db.document.findUnique({ where: { id: ebrc.json.id } })).storageKey}`)).includes(Buffer.from("%PDF")));
+    const dl = await fetch(`${BASE}/api/documents/${ebrc.json.id}/download`, { headers: { Cookie: A.jar.cookie } });
+    check("the owner can download it back", dl.status === 200 && (await dl.arrayBuffer()).byteLength === pdf1.length);
+    check("another organization cannot download it", (await fetch(`${BASE}/api/documents/${ebrc.json.id}/download`, { headers: { Cookie: B.jar.cookie } })).status === 404);
+    check("customers cannot verify documents", (await api(`/api/admin/documents/${ebrc.json.id}`, { method: "POST", jar: A.jar, body: { decision: "VERIFY" } })).status === 403);
+    const queue = await api("/api/admin/documents?status=RECEIVED", { jar: staffJar });
+    check("the upload is in the staff queue", queue.json.data.some(d => d.id === ebrc.json.id));
+    check("rejecting needs a reason", (await api(`/api/admin/documents/${ebrc.json.id}`, { method: "POST", jar: staffJar, body: { decision: "REJECT" } })).status === 400);
+    const ver = await api(`/api/admin/documents/${ebrc.json.id}`, { method: "POST", jar: staffJar, body: { decision: "VERIFY", note: "Matches transfer and bank record" } });
+    check("staff verify the upload", ver.status === 200 && ver.json.status === "VERIFIED");
+    check("a verified document cannot be changed", (await api(`/api/admin/documents/${ebrc.json.id}`, { method: "POST", jar: staffJar, body: { decision: "REJECT", note: "changed my mind" } })).status === 409);
+
+    // Partner delivers a certificate through the signed webhook
+    const pdf2 = await mkPdf("FIRC from partner " + uniq);
+    const evBody = JSON.stringify({ id: `docev_${uniq}`, type: "document.issued", data: { transfer_ref: tIn.externalRef, type: "FIRC", number: `FIRC-${uniq}`, issuer: "Partner bank", issued_on: "2026-10-02", filename: "firc.pdf", content_base64: pdf2.toString("base64") } });
+    const sig = createHmac("sha256", MOCK_SECRET).update(evBody).digest("hex");
+    const evRes = await fetch(`${BASE}/api/webhooks/partner/mock_in_pacb`, { method: "POST", headers: { "x-partner-signature": sig }, body: evBody });
+    check("a signed partner event delivers a certificate straight to the transfer", evRes.status === 200 && (await api(`/api/transfers/${tIn.id}/documents`, { key: A.key })).json.data.some(d => d.type === "FIRC" && d.source === "PARTNER" && d.status === "VERIFIED" && d.has_file));
+    const evRes2 = await fetch(`${BASE}/api/webhooks/partner/mock_in_pacb`, { method: "POST", headers: { "x-partner-signature": sig }, body: evBody });
+    check("the same event twice does not duplicate the document", (await evRes2.json()).status === "duplicate" && (await db.document.count({ where: { transferId: tIn.id, type: "FIRC" } })) === 1);
+
+    // Generated documents
+    const advice = await fetch(`${BASE}/api/transfers/${tIn.id}/advice`, { headers: { Cookie: A.jar.cookie } });
+    const adviceBytes = Buffer.from(await advice.arrayBuffer());
+    check("the payment advice is a PDF", advice.status === 200 && advice.headers.get("content-type") === "application/pdf" && adviceBytes.subarray(0, 5).toString() === "%PDF-");
+    const pack = await fetch(`${BASE}/api/transfers/${tIn.id}/pack`, { headers: { Cookie: A.jar.cookie } });
+    const packDoc = await PDFDocument.load(Buffer.from(await pack.arrayBuffer()));
+    const adviceDoc = await PDFDocument.load(adviceBytes);
+    check("the realisation pack merges the attached certificates after Vaulte's own pages", pack.status === 200 && packDoc.getPageCount() >= adviceDoc.getPageCount() + 4, `${packDoc.getPageCount()} vs ${adviceDoc.getPageCount()}`);
+    check("generating a pack is audit-logged with its fingerprint", (await db.auditLog.count({ where: { action: "document.pack_generated", resourceId: tIn.id } })) >= 1);
+    check("another organization cannot generate a pack for this transfer", (await fetch(`${BASE}/api/transfers/${tIn.id}/pack`, { headers: { Cookie: B.jar.cookie } })).status === 404);
+    check("API keys can fetch documents too (ERP use)", (await api("/api/documents?transfer_id=" + tIn.id, { key: A.key })).json.data.length >= 3);
   }
 
   console.log("== Webhooks");

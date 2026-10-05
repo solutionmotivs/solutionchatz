@@ -68,6 +68,8 @@ enum WebhookEventType {
   KYC_APPROVED
   KYC_REJECTED
   KYC_NEEDS_INFO
+  DOCUMENT_RECEIVED
+  DOCUMENT_VERIFIED
   COMPLIANCE_FLAGGED
   FX_RATE_UPDATED
   TRANSFER_CREATED
@@ -1021,4 +1023,44 @@ model ReconLine {
   @@index([batchId])
   @@index([status])
   @@index([transferId])
+}
+
+// ── Trade and compliance documents (eFIRA/FIRC/eBRC/bank certificates, invoices, proofs) ──
+// Certificates are issued by banks / DGFT / partners, never by Vaulte: this table stores, links and verifies them.
+model Document {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  /// EFIRA | FIRC | EBRC | BRC | BANK_CERT | INVOICE_COPY | SHIPPING_BILL | PURPOSE_PROOF | OTHER
+  type     String
+  issuer   String?
+  number   String?
+  issuedOn DateTime?
+  /// Cross-references: EDPMS/IRM numbers, shipping bill, DGFT reference...
+  refs     Json      @default("{}")
+  /// UPLOAD | PARTNER | GENERATED
+  source   String
+  /// RECEIVED (awaiting staff check) | VERIFIED | REJECTED
+  status   String    @default("RECEIVED")
+  note     String?
+
+  /// File is optional: some certificates arrive as a reference number only.
+  filename   String?
+  mime       String?
+  size       Int?
+  sha256     String?
+  storageKey String?
+
+  uploadedById String?
+  verifiedById String?
+  verifiedAt   DateTime?
+
+  organizationId String
+  transferId     String?
+  invoiceId      String?
+
+  @@index([organizationId])
+  @@index([transferId])
+  @@index([status])
+  @@index([type])
 }

@@ -51,12 +51,12 @@ export default async function TransfersPage() {
           <table className="w-full text-[11px]">
             <thead>
               <tr className="bg-cream/60 text-[9px] uppercase tracking-widest text-mist text-left">
-                {["When", "From → To", "Sent", "Received", "Route", "Status"].map(h => <th key={h} className="px-4 py-3 font-normal">{h}</th>)}
+                {["When", "From → To", "Sent", "Received", "Route", "Status", ""].map(h => <th key={h} className="px-4 py-3 font-normal">{h}</th>)}
               </tr>
             </thead>
             <tbody>
               {transfers.length === 0 && (
-                <tr><td colSpan={6} className="px-4 py-8 text-center text-mist">No transfers yet. Create a quote with POST /api/quotes.</td></tr>
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-mist">No transfers yet. Create a quote with POST /api/quotes.</td></tr>
               )}
               {transfers.map(t => {
                 const route = t.route as unknown as { token: string | null; partners: string[] };
@@ -71,6 +71,7 @@ export default async function TransfersPage() {
                       <span className="status-pill status-draft text-[8px]">{t.status.replace(/_/g, " ")}</span>
                       {t.statusReason && <div className="text-[9px] text-mist mt-1">{t.statusReason}</div>}
                     </td>
+                    <td className="px-4 py-3 text-right"><Link href={`/dashboard/transfers/${t.id}`} className="text-gold hover:underline">Details & documents →</Link></td>
                   </tr>
                 );
               })}

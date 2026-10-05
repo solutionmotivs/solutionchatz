@@ -6,6 +6,7 @@ import { Prisma, type Entity, type Transfer } from "@prisma/client";
 import { db } from "@/lib/db";
 import { screenEntity } from "@/lib/compliance/aml";
 import { screenWallet } from "@/lib/compliance/wallet";
+import { addDocument, recordEfiraReference } from "@/lib/documents/service";
 import { screenAndFlagEntity } from "@/lib/sanctions/entities";
 import {
   calendarYearStart, evaluateTransfer, financialYearStart, type GuardContext, type GuardResult,
@@ -509,6 +510,7 @@ async function onPayoutCompleted(transferId: string, efiraRef?: string | null): 
     }
     return tx.transfer.update({ where: { id: t.id }, data: { status: "COMPLETED", completedAt: new Date(), efiraRef: efiraRef ?? t.efiraRef, statusReason: null } });
   });
+  await recordEfiraReference(done, done.efiraRef).catch(e => console.error("efira record failed", e));
   await emitWebhookEvent({ organizationId: t.organizationId, event: "transfer.completed", data: { transfer_id: t.id, efira_ref: done.efiraRef } });
   if (t.invoiceId) await emitWebhookEvent({ organizationId: t.organizationId, event: "invoice.paid", data: { invoice_id: t.invoiceId, transfer_id: t.id } });
   return done;
@@ -630,6 +632,16 @@ async function routeEvent(partnerId: string, ev: PartnerEventInput): Promise<boo
       const t = await findTransferForEvent(d);
       if (!t || t.status !== "PAYING_OUT") return false;
       await handlePayoutFailure(t.id, String(d.reason ?? "partner payout failed"));
+      return true;
+    }
+    case "document.issued": {
+      // A licensed partner/bank delivers a certificate (eFIRA, FIRC, eBRC, ...) for a transfer. The signature already proved the sender.
+      const t = await findTransferForEvent(d);
+      if (!t) return false;
+      let file: { data: Buffer; name: string } | undefined;
+      if (typeof d.content_base64 === "string" && d.content_base64.length <= 11_500_000) file = { data: Buffer.from(d.content_base64, "base64"), name: String(d.filename ?? "certificate.pdf") };
+      await addDocument({ organizationId: t.organizationId, transferId: t.id, type: String(d.type ?? "OTHER").toUpperCase(), number: d.number ? String(d.number) : null, issuer: String(d.issuer ?? partnerId), issuedOn: d.issued_on ? String(d.issued_on) : null, refs: d.refs && typeof d.refs === "object" ? Object.fromEntries(Object.entries(d.refs as Record<string, unknown>).map(([k, v]) => [k, String(v)])) : {}, source: "PARTNER", file, status: "VERIFIED" });
+      if (String(d.type).toUpperCase() === "EFIRA" && d.number && !t.efiraRef) await db.transfer.update({ where: { id: t.id }, data: { efiraRef: String(d.number) } });
       return true;
     }
     case "virtual_account.credit":
