@@ -16,7 +16,7 @@ export async function sendEmail(opts: {
   const { to, template, organizationId } = opts;
 
   // Without a provider key: never pretend to deliver in production (OTP emails would be lost or leaked in logs).
-  if (!process.env.RESEND_API_KEY && process.env.NODE_ENV === "production") {
+  if (!process.env.RESEND_API_KEY && process.env.NODE_ENV === "production" && process.env.DEMO_MODE !== "true") {
     log("error", "RESEND_API_KEY is not set: email not sent");
     await db.emailLog.create({
       data: { to, subject: template.subject, template: "unknown", status: "failed", organizationId: organizationId ?? null },

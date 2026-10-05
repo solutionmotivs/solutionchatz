@@ -66,7 +66,7 @@ export function getStore(): BlobStore {
       secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
     });
   } else {
-    if (process.env.NODE_ENV === "production") throw new Error("S3_BUCKET must be set in production (documents cannot live on the app server's disk)");
+    if (process.env.NODE_ENV === "production" && process.env.DEMO_MODE !== "true") throw new Error("S3_BUCKET must be set in production (documents cannot live on the app server's disk)");
     store = new LocalStore(process.env.LOCAL_STORAGE_DIR ?? path.join(process.cwd(), ".data", "uploads"));
   }
   return store;

@@ -71,7 +71,7 @@ export async function getLiveRates(
 
   // Never quote real money from a hard-coded table: in production a missing live rate means "no quote".
   for (const target of missing) {
-    if (process.env.NODE_ENV === "production") break;
+    if (process.env.NODE_ENV === "production" && process.env.DEMO_MODE !== "true") break;
     if (!cached[target] && FALLBACK[target]) {
       cached[target] = FALLBACK[target];
     }

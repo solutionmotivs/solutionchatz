@@ -8,6 +8,7 @@ const check = (area, name, ok, detail = "", blocker = true) => results.push({ ar
 // Secrets and switches
 for (const [k, min] of [["JWT_SECRET", 32], ["OTP_PEPPER", 32], ["ENCRYPTION_KEY", 32], ["CRON_SECRET", 24], ["DATABASE_URL", 10], ["NEXT_PUBLIC_APP_URL", 8]]) check("config", `${k} set`, (env[k]?.length ?? 0) >= min, `need >= ${min} characters`);
 check("config", "NODE_ENV=production", env.NODE_ENV === "production");
+check("config", "DEMO_MODE is off (it exposes login codes and fake data paths)", env.DEMO_MODE !== "true", "DEMO_MODE=true is for public test-mode demos only");
 check("config", "AUTH_EXPOSE_DEV_OTP off", env.AUTH_EXPOSE_DEV_OTP !== "true");
 check("config", "app URL is https", /^https:\/\//.test(env.NEXT_PUBLIC_APP_URL ?? ""));
 check("config", "no weak/default secrets", ![env.JWT_SECRET, env.OTP_PEPPER, env.ENCRYPTION_KEY].some(s => /dev-only|changeme|example|0123456789abcdef/.test(s ?? "")));

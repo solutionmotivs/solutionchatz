@@ -5,7 +5,8 @@ import { guardsInstalled } from "@/lib/ledger/guards";
 export interface Check { name: string; ok: boolean; detail?: string; critical: boolean }
 
 export async function readiness(): Promise<{ ok: boolean; checks: Check[] }> {
-  const prod = process.env.NODE_ENV === "production";
+  // DEMO_MODE (public test-mode demo with fake money) relaxes the production-only checks; preflight refuses to pass with it on.
+  const prod = process.env.NODE_ENV === "production" && process.env.DEMO_MODE !== "true";
   const checks: Check[] = [];
   const add = (name: string, ok: boolean, critical: boolean, detail?: string) => checks.push({ name, ok, critical, detail });
 

@@ -65,5 +65,5 @@ export async function verifyOtp(opts: { purpose: OtpPurpose; email: string; code
 
 /** Test/dev only: lets automated tests read the code from the API response. Never active in production. */
 export function exposeDevOtp(): boolean {
-  return process.env.NODE_ENV !== "production" && process.env.AUTH_EXPOSE_DEV_OTP === "true";
+  return (process.env.NODE_ENV !== "production" || process.env.DEMO_MODE === "true") && process.env.AUTH_EXPOSE_DEV_OTP === "true";
 }

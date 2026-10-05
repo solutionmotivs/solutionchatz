@@ -85,7 +85,7 @@ export default function LandingPage() {
             </h1>
             <p className="font-mono text-[13px] leading-[1.85] text-slate max-w-[420px] mb-12">
               Pay and get paid across borders with USDC, USDT or local bank transfers.
-              We route each payment through licensed partners on the fastest, cheapest path
+              We compare the routes our licensed partners offer and show you every cost before you confirm; you choose speed or cost
               and show you every fee before you commit.
             </p>
             <div className="flex gap-4">
