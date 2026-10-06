@@ -83,9 +83,12 @@ type SectionProps = { c: any; editable: boolean; onSaved: (c: any) => void; setE
 function ProfileSection({ c, editable, onSaved, setErr }: SectionProps) {
   const [form, setForm] = useState<Record<string, any>>(c.profile ?? {});
   const [saved, setSaved] = useState(false);
+  const strict = !!(c as any).name_strict;
+  const SRC: Record<string, string> = { REGISTRY: "from the official registry", OCR: "read from your uploaded document", CKYC: "from CKYC", DIGILOCKER: "from DigiLocker", STAFF: "set by a Vaulte reviewer", USER_ENTERED: "typed by you, not yet checked" };
   async function save() {
     setErr(""); setSaved(false);
-    const r = await api(`/api/verification/${c.id}`, { method: "PATCH", body: { profile: form } });
+    const { legal_name, legal_name_source, legal_name_entered, ...rest } = form;
+    const r = await api(`/api/verification/${c.id}`, { method: "PATCH", body: { profile: strict ? rest : form } });
     if (!r.ok) return setErr(r.error?.message ?? "Could not save");
     onSaved(r.data); setSaved(true);
   }
@@ -95,7 +98,11 @@ function ProfileSection({ c, editable, onSaved, setErr }: SectionProps) {
         {req(c).profile.map((f: any) => (
           <div key={f.key} className={f.type === "textarea" ? "sm:col-span-2" : ""}>
             <label className="label-text">{f.label}{f.required ? " *" : ""}</label>
-            {f.type === "select" ? (
+            {f.key === "legal_name" && strict ? (
+              <div className="input-field bg-ink/5 text-[13px]">
+                {form.legal_name ? <><strong>{form.legal_name}</strong> <span className="text-mist">({SRC[form.legal_name_source] ?? form.legal_name_source})</span></> : <span className="text-mist">Not set yet. It is taken from your registry record (enter your registration number below) or read from your incorporation document. It cannot be typed.</span>}
+              </div>
+            ) : f.type === "select" ? (
               <select className="input-field" disabled={!editable} value={form[f.key] ?? ""} onChange={e => setForm({ ...form, [f.key]: e.target.value })}>
                 <option value="">Select…</option>{f.options.map((o: string) => <option key={o} value={o}>{o.replace(/_/g, " ")}</option>)}
               </select>
@@ -117,6 +124,7 @@ function ItemsSection({ c, editable, onSaved, setErr }: SectionProps) {
   const [vals, setVals] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState("");
   const [note, setNote] = useState<Record<string, string>>({});
+  const strict = !!(c as any).name_strict;
   const [found, setFound] = useState<Record<string, any>>({});
   async function lookup(code: string) {
     const value = (vals[code] ?? "").trim();
@@ -174,7 +182,9 @@ function ItemsSection({ c, editable, onSaved, setErr }: SectionProps) {
                   <div><strong className="text-ink">{f.legal_name ?? "Found (no name published)"}</strong>{f.active === false ? " · not active" : ""}</div>
                   {f.address && <div>{f.address}</div>}
                   {f.name_match != null && f.name_match < 0.5 && <div className="text-[#9A4B12]">This differs from the name you entered; a reviewer will compare them.</div>}
-                  {f.legal_name && <button className="text-gold hover:underline mt-1" onClick={() => useName(it.code, f.legal_name, f.address)}>Use this as my legal name</button>}
+                  {f.legal_name && (strict
+                    ? <button className="text-gold hover:underline mt-1" onClick={() => save(it.code)}>Save this number and take the name from the registry</button>
+                    : <button className="text-gold hover:underline mt-1" onClick={() => useName(it.code, f.legal_name, f.address)}>Use this as my legal name</button>)}
                   <div className="text-[10px] text-mist mt-1">Source: <a className="hover:underline" href={f.source_url} target="_blank" rel="noopener noreferrer">{f.source}</a></div>
                 </>}
                 {f.status === "NOT_FOUND" && <div className="text-[#9B2C2C]">{f.reason ?? "Not found in the official register."} Check the number and try again.</div>}
@@ -214,7 +224,7 @@ function PeopleSection({ c, editable, onSaved, setErr }: SectionProps) {
           <thead><tr className="text-left text-[9px] uppercase tracking-widest text-mist"><th className="py-2">Name</th><th>Role</th><th>Ownership</th><th>PAN</th><th>PEP</th><th></th></tr></thead>
           <tbody>{c.people.map((p: any) => (
             <tr key={p.id} className="border-t border-ink/10">
-              <td className="py-2">{p.full_name}</td><td>{p.role}</td><td>{p.ownership_pct != null ? `${p.ownership_pct}%` : "—"}</td>
+              <td className="py-2">{p.full_name}{p.name_source && !["OCR", "CKYC", "REGISTRY", "DIGILOCKER", "STAFF"].includes(p.name_source) && (c as any).name_strict && <div className="text-[10px] text-[#B7791F]">Provisional: upload this person's ID to confirm the name</div>}{["OCR", "CKYC", "STAFF", "DIGILOCKER"].includes(p.name_source) && <div className="text-[10px] text-mist">Name {p.name_source === "OCR" ? "read from ID" : p.name_source === "CKYC" ? "from CKYC" : "confirmed"}</div>}</td><td>{p.role}</td><td>{p.ownership_pct != null ? `${p.ownership_pct}%` : "—"}</td>
               <td>{p.pan_masked ? <>{p.pan_masked} {p.pan_status && <Chip status={p.pan_status} />}</> : "—"}</td><td>{p.is_pep ? "Yes" : "No"}</td>
               <td className="text-right">{editable && <button className="text-[#9B2C2C] text-[10px] uppercase tracking-widest" onClick={() => remove(p.id)}>Remove</button>}</td>
             </tr>))}</tbody>
@@ -225,7 +235,7 @@ function PeopleSection({ c, editable, onSaved, setErr }: SectionProps) {
           {roles.length > 1 && (
             <div><label className="label-text">Role</label><select className="input-field" value={f.role} onChange={e => setF({ ...f, role: e.target.value })}>{roles.map(r => <option key={r.role} value={r.role}>{r.label}</option>)}</select></div>
           )}
-          <div><label className="label-text">Full name (as on ID)</label><input className="input-field" value={f.full_name} onChange={e => setF({ ...f, full_name: e.target.value })} /></div>
+          <div><label className="label-text">Full name (provisional: replaced by the name on the ID you upload)</label><input className="input-field" value={f.full_name} onChange={e => setF({ ...f, full_name: e.target.value })} /></div>
           <div><label className="label-text">Date of birth</label><input className="input-field" type="date" value={f.date_of_birth} onChange={e => setF({ ...f, date_of_birth: e.target.value })} /></div>
           <div><label className="label-text">Nationality</label><select className="input-field" value={f.nationality} onChange={e => setF({ ...f, nationality: e.target.value })}>{COUNTRIES.map(([code, name]) => <option key={code} value={code}>{name}</option>)}</select></div>
           <div><label className="label-text">Lives in</label><select className="input-field" value={f.country_of_residence} onChange={e => setF({ ...f, country_of_residence: e.target.value })}>{COUNTRIES.map(([code, name]) => <option key={code} value={code}>{name}</option>)}</select></div>

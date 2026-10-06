@@ -197,7 +197,9 @@ export function requirementsFor(kind: CaseKind, country: string, purposes: strin
 export interface CaseSnapshot {
   profile: Record<string, unknown>;
   items: { code: string; status: string }[];
-  people: { role: string; ownershipPct?: number | null }[];
+  people: { id?: string; role: string; fullName?: string; nameSource?: string | null; ownershipPct?: number | null }[];
+  /** Names must come from documents/registries (see lib/kyc/names.ts). */
+  nameStrict?: boolean;
   documents: { type: string; personId?: string | null; status: string }[];
 }
 
@@ -210,8 +212,13 @@ export interface MissingItem {
 /** What still blocks submission. Failed items and rejected documents count as missing. */
 export function missingForSubmission(req: Requirements, snap: CaseSnapshot): MissingItem[] {
   const out: MissingItem[] = [];
+  const verified = (src?: string | null) => !!src && ["OCR", "CKYC", "REGISTRY", "DIGILOCKER", "STAFF"].includes(src);
   for (const f of req.profile) {
     const v = snap.profile[f.key];
+    if (snap.nameStrict && f.key === "legal_name") {
+      if (req.kind === "KYB" && !verified(snap.profile.legal_name_source as string | undefined)) out.push({ section: "profile", key: "legal_name", label: "Legal name (taken from your registry record or incorporation document: look up your registration number or upload the document)" });
+      continue;
+    }
     if (f.required && (v === undefined || v === null || String(v).trim() === "")) out.push({ section: "profile", key: f.key, label: f.label });
   }
   for (const it of req.items) {
@@ -234,6 +241,7 @@ export function missingForSubmission(req: Requirements, snap: CaseSnapshot): Mis
       out.push({ section: "document", key: d.type, label: d.label });
     }
   }
+  if (snap.nameStrict) for (const p of snap.people) if (!verified(p.nameSource)) out.push({ section: "person", key: `name:${p.id ?? p.fullName}`, label: `Name of ${p.fullName ?? "this person"} (read from their ID: upload the ID document)` });
   // Beneficial-ownership completeness: named owners above the threshold must add up, and the shares must be plausible.
   const total = snap.people.filter(p => p.role === "UBO").reduce((s, p) => s + (p.ownershipPct ?? 0), 0);
   if (total > 100.0001) out.push({ section: "person", key: "UBO", label: "Ownership percentages add up to more than 100%" });

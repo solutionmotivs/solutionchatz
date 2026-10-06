@@ -842,6 +842,8 @@ model VerificationPerson {
   screening          Json?
   /// Where fullName came from: OCR | CKYC | REGISTRY | STAFF | USER_ENTERED_LEGACY
   nameSource         String?
+  /// What the applicant typed before the document replaced it (kept for the reviewer)
+  nameEntered        String?
   /// AML/PEP provider result (never raw national ID numbers)
   pepCheck           Json?
 

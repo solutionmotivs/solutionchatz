@@ -111,6 +111,83 @@ export class AbnLookupAdapter implements RegistryAdapter {
   }
 }
 
+/**
+ * Keyless national open-data registers (government-run, verified reachable and parsed in October 2026):
+ * France (INSEE SIRENE via recherche-entreprises.api.gouv.fr), Norway (Bronnoysund), Czechia (ARES),
+ * Singapore (ACRA via data.gov.sg), Estonia (e-Business Register). Each maps "source down" to UNAVAILABLE.
+ */
+const digits = (v: string) => v.replace(/\D/g, "");
+interface NationalSpec { country: string; id: string; source: string; url: string; valid: (v: string) => boolean; fetch: (v: string, base?: string) => Promise<RegistryRecord> }
+const found = (spec: Pick<NationalSpec, "id" | "url">, r: Omit<RegistryRecord, "source" | "sourceUrl" | "checkedAt">): RegistryRecord => ({ ...r, source: spec.id, sourceUrl: spec.url, checkedAt: nowIso() });
+const notFound = (spec: Pick<NationalSpec, "id" | "url">, reason: string): RegistryRecord => found(spec, { status: "NOT_FOUND", details: {}, reason });
+
+export const NATIONAL_REGISTRIES: NationalSpec[] = [
+  {
+    country: "FR", id: "fr_sirene", source: "INSEE SIRENE", url: "https://annuaire-entreprises.data.gouv.fr/", valid: v => /^\d{9}$/.test(digits(v)),
+    async fetch(v, base = process.env.FR_SIRENE_BASE_URL ?? "https://recherche-entreprises.api.gouv.fr") {
+      const n = digits(v); const { status, json } = await getJson(`${base}/search?q=${n}&per_page=1`);
+      if (status !== 200 || !json) return unavailable(this.id, this.url, `SIRENE HTTP ${status}`);
+      const r = (json.results ?? []).find((x: any) => x.siren === n);
+      // For an unknown SIREN the API echoes a placeholder entry with no name, so a name is required to count as found.
+      if (!r || !(r.nom_raison_sociale || r.nom_complet)) return notFound(this, "SIREN not found in the French business register");
+      return found(this, { status: "FOUND", legalName: r.nom_raison_sociale || r.nom_complet, address: r.siege?.adresse, active: r.etat_administratif === "A", details: { siren: n, legal_form_code: r.nature_juridique, created: r.date_creation, administrative_status: r.etat_administratif } });
+    },
+  },
+  {
+    country: "NO", id: "no_brreg", source: "Bronnoysund Register Centre", url: "https://www.brreg.no/", valid: v => /^\d{9}$/.test(digits(v)),
+    async fetch(v, base = process.env.NO_BRREG_BASE_URL ?? "https://data.brreg.no/enhetsregisteret/api") {
+      const n = digits(v); const { status, json } = await getJson(`${base}/enheter/${n}`);
+      if (status === 404) return notFound(this, "Organisation number not found in Enhetsregisteret");
+      if (status !== 200 || !json) return unavailable(this.id, this.url, `Brreg HTTP ${status}`);
+      const a = json.forretningsadresse ?? {};
+      return found(this, { status: "FOUND", legalName: json.navn, address: [...(a.adresse ?? []), a.postnummer, a.poststed, a.land].filter(Boolean).join(", "), active: !json.konkurs && !json.underAvvikling && !json.slettedato, details: { org_number: n, legal_form: json.organisasjonsform?.kode, founded: json.stiftelsesdato, bankrupt: !!json.konkurs, under_liquidation: !!json.underAvvikling } });
+    },
+  },
+  {
+    country: "CZ", id: "cz_ares", source: "ARES (Czech Ministry of Finance)", url: "https://ares.gov.cz/", valid: v => /^\d{8}$/.test(digits(v)),
+    async fetch(v, base = process.env.CZ_ARES_BASE_URL ?? "https://ares.gov.cz/ekonomicke-subjekty-v-be/rest") {
+      const n = digits(v); const { status, json } = await getJson(`${base}/ekonomicke-subjekty/${n}`);
+      if (status === 404) return notFound(this, "ICO not found in ARES");
+      if (status !== 200 || !json) return unavailable(this.id, this.url, `ARES HTTP ${status}`);
+      return found(this, { status: "FOUND", legalName: json.obchodniJmeno, address: json.sidlo?.textovaAdresa, active: !json.datumZaniku, details: { ico: n, legal_form_code: json.pravniForma, created: json.datumVzniku, ended: json.datumZaniku } });
+    },
+  },
+  {
+    country: "SG", id: "sg_acra", source: "ACRA via data.gov.sg", url: "https://data.gov.sg/", valid: v => /^[0-9]{8,9}[A-Za-z]$|^[TSRtsr]\d{2}[A-Za-z]{2}\d{4}[A-Za-z]$/.test(v.replace(/\s/g, "")),
+    async fetch(v, base = process.env.SG_DATAGOV_BASE_URL ?? "https://data.gov.sg/api/action") {
+      const uen = v.replace(/\s/g, "").toUpperCase();
+      const { status, json } = await getJson(`${base}/datastore_search?resource_id=d_3f960c10fed6145404ca7b821f263b87&filters=${encodeURIComponent(JSON.stringify({ uen }))}&limit=1`);
+      if (status !== 200 || !json?.success) return unavailable(this.id, this.url, `data.gov.sg HTTP ${status}`);
+      const r = json.result?.records?.[0];
+      if (!r) return notFound(this, "UEN not found in the ACRA register");
+      return found(this, { status: "FOUND", legalName: r.entity_name, address: [r.reg_street_name, r.reg_postal_code, "SG"].filter(Boolean).join(", "), active: /registered|live/i.test(String(r.uen_status_desc)), details: { uen, entity_type: r.entity_type_desc, status: r.uen_status_desc, issued: r.uen_issue_date, agency: r.issuance_agency_desc } });
+    },
+  },
+  {
+    country: "EE", id: "ee_rik", source: "e-Business Register (RIK)", url: "https://ariregister.rik.ee/", valid: v => /^\d{8}$/.test(digits(v)),
+    async fetch(v, base = process.env.EE_RIK_BASE_URL ?? "https://ariregister.rik.ee/est/api") {
+      const n = digits(v); const { status, json } = await getJson(`${base}/autocomplete?q=${n}`);
+      if (status !== 200 || !json) return unavailable(this.id, this.url, `RIK HTTP ${status}`);
+      const r = (json.data ?? []).find((x: any) => String(x.reg_code) === n);
+      if (!r) return notFound(this, "Registry code not found in the Estonian e-Business Register");
+      return found(this, { status: "FOUND", legalName: r.name, address: [r.legal_address, r.zip_code].filter(Boolean).join(", "), active: r.status === "R", details: { reg_code: n, status_code: r.status, legal_form: r.legal_form } });
+    },
+  },
+];
+
+export class NationalRegistryAdapter implements RegistryAdapter {
+  readonly id: string;
+  constructor(private spec: NationalSpec) { this.id = spec.id; }
+  configured() { return true; }
+  supports(code: RegistryCode, country: string) { return code === "REG_NO" && country === this.spec.country; }
+  lookup(_c: RegistryCode, value: string, _country?: string) {
+    return guard(this.spec.id, this.spec.url, async () => {
+      if (!this.spec.valid(value)) return notFound(this.spec, `Not a valid ${this.spec.source} number format`);
+      return this.spec.fetch(value);
+    });
+  }
+}
+
 export function defaultAdapters(): RegistryAdapter[] {
-  return [new ViesAdapter(), new GleifAdapter(), new CompaniesHouseAdapter(), new AbnLookupAdapter()];
+  return [new ViesAdapter(), new GleifAdapter(), new CompaniesHouseAdapter(), new AbnLookupAdapter(), ...NATIONAL_REGISTRIES.map(s => new NationalRegistryAdapter(s))];
 }

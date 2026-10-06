@@ -14,6 +14,7 @@ import { approvalsNeeded, assessRisk, nextReviewDate, tierLimits, type Tier } fr
 import { hit } from "@/lib/security/ratelimit-db";
 import { mask, normalise } from "./validators";
 import { getKycServices, type PepResult } from "./providers/apisetu/services";
+import { BUSINESS_NAME_DOCS, isVerifiedSource, nameMode, PERSON_NAME_DOCS, typedVsDocument } from "./names";
 import { lookupRegistry, nameMatchScore, type RegistryRecord } from "./registries";
 
 export class KycError extends Error {
@@ -41,7 +42,7 @@ export function presentCase(c: FullCase) {
   const req = requirementsOfCase(c);
   const missing = missingForSubmission(req, {
     profile: (c.profile ?? {}) as Record<string, unknown>,
-    items: c.items, people: c.people, documents: c.documents,
+    items: c.items, people: c.people, documents: c.documents, nameStrict: nameMode() === "strict",
   });
   return {
     id: c.id, kind: c.kind, subject_type: c.subjectType, entity_id: c.entityId, country: c.country, purposes: c.purposes,
@@ -49,6 +50,7 @@ export function presentCase(c: FullCase) {
     limits: c.status === "APPROVED" ? tierLimits(c.kind as CaseKind, c.tier as Tier) : null,
     submitted_at: c.submittedAt, decided_at: c.decidedAt, next_review_at: c.nextReviewAt,
     profile: c.profile,
+    name_strict: nameMode() === "strict",
     items: c.items.map(i => ({ code: i.code, masked: i.valueMasked, status: i.status, provider: i.provider, details: i.result, verified_at: i.verifiedAt })),
     people: c.people.map(p => ({
       id: p.id, role: p.role, full_name: p.fullName, date_of_birth: p.dateOfBirth, nationality: p.nationality, country_of_residence: p.countryOfResidence,
@@ -87,7 +89,8 @@ export async function createCase(opts: { organizationId: string; entityId?: stri
   const created = await db.verificationCase.create({
     data: {
       kind, subjectType: entityId ? "ENTITY" : "ORGANIZATION", country, purposes, organizationId: org.id, entityId: entityId ?? null,
-      profile: entityId ? { legal_name: (await db.entity.findUnique({ where: { id: entityId } }))?.legalName } : { legal_name: org.legalName ?? org.name },
+      // Strict mode: the legal name is not prefilled from what was typed at sign-up; it comes from a registry or the incorporation document.
+      profile: nameMode() === "strict" ? {} : { legal_name: entityId ? (await db.entity.findUnique({ where: { id: entityId } }))?.legalName : org.legalName ?? org.name, legal_name_source: "USER_ENTERED" },
     },
     include: { items: true, people: true, documents: true },
   });
@@ -104,7 +107,12 @@ export async function setProfile(c: FullCase, patch: Record<string, unknown>) {
   const req = requirementsOfCase(c);
   const allowed = new Map(req.profile.map(f => [f.key, f]));
   const next: Record<string, unknown> = { ...((c.profile ?? {}) as Record<string, unknown>) };
+  if ("legal_name" in patch || "legal_name_source" in patch) {
+    if (nameMode() === "strict") throw new KycError("NAME_FROM_DOCUMENT_REQUIRED", "The legal name is taken from your registry record or incorporation document, not typed. Look up your registration number or upload the document.", 400, "legal_name");
+    next.legal_name_source = "USER_ENTERED";
+  }
   for (const [k, v] of Object.entries(patch)) {
+    if (k === "legal_name_source") continue;
     const f = allowed.get(k);
     if (!f) throw new KycError("UNKNOWN_FIELD", `Unknown field "${k}"`, 400, k);
     if (v === null || v === "") { delete next[k]; continue; }
@@ -165,7 +173,11 @@ export function registryToCheck(code: string, r: RegistryRecord, enteredName?: s
 async function prefillFromRegistry(c: FullCase, r: RegistryRecord) {
   const p = { ...((c.profile ?? {}) as Record<string, unknown>) };
   let changed = false;
-  if (r.legalName && !String(p.legal_name ?? "").trim()) { p.legal_name = r.legalName; changed = true; }
+  // The official name replaces anything typed (the typed value is kept for the reviewer); a name already from a verified source is left alone.
+  if (r.legalName && !isVerifiedSource(p.legal_name_source as string | undefined)) {
+    if (String(p.legal_name ?? "").trim() && p.legal_name !== r.legalName) p.legal_name_entered = p.legal_name;
+    p.legal_name = r.legalName; p.legal_name_source = "REGISTRY"; changed = true;
+  }
   if (r.address && !String(p.address ?? "").trim()) { p.address = r.address; changed = true; }
   if (changed) await db.verificationCase.update({ where: { id: c.id }, data: { profile: p as Prisma.InputJsonValue } });
 }
@@ -213,6 +225,23 @@ export async function ocrDocument(docId: string, type: string, data: Buffer, mim
   const r = await svc.ocr({ docType: type, data, mime });
   if (r.status === "UNAVAILABLE") return { status: r.status, reason: r.reason };
   const ocr = { status: r.status, provider: svc.name, fields: r.fields, quality: r.quality, at: new Date().toISOString() };
+  const doc = await db.verificationDocument.findUnique({ where: { id: docId }, include: { case: true, person: true } });
+  if (doc && r.status === "OK" && r.fields.name) {
+    const name = r.fields.name.trim();
+    if (doc.person && PERSON_NAME_DOCS.has(type) && (!doc.person.nameSource || ["USER_ENTERED", "OCR"].includes(doc.person.nameSource))) {
+      // The ID's name replaces the typed one; a big difference is flagged for the reviewer.
+      const typed = doc.person.nameSource === "USER_ENTERED" ? doc.person.fullName : doc.person.nameEntered;
+      await db.verificationPerson.update({ where: { id: doc.person.id }, data: { fullName: name, nameSource: "OCR", nameEntered: typed && typed !== name ? typed : null, ...(r.fields.dob && !doc.person.dateOfBirth && /^\d{4}-\d{2}-\d{2}$/.test(r.fields.dob) ? { dateOfBirth: r.fields.dob } : {}) } });
+      if (typed && typedVsDocument(typed, name) < 0.5) await audit(doc.case.organizationId, undefined, "verification.name_mismatch", doc.caseId, { person_id: doc.person.id, score: typedVsDocument(typed, name) });
+    } else if (!doc.personId && BUSINESS_NAME_DOCS.has(type) && doc.case.kind === "KYB") {
+      const prof = { ...((doc.case.profile ?? {}) as Record<string, unknown>) };
+      if (!isVerifiedSource(prof.legal_name_source as string | undefined) || prof.legal_name_source === "OCR") {
+        if (prof.legal_name && prof.legal_name !== name && prof.legal_name_source === "USER_ENTERED") prof.legal_name_entered = prof.legal_name;
+        prof.legal_name = name; prof.legal_name_source = "OCR";
+        await db.verificationCase.update({ where: { id: doc.caseId }, data: { profile: prof as Prisma.InputJsonValue } });
+      }
+    }
+  }
   await db.verificationDocument.update({
     where: { id: docId },
     data: { ocr: ocr as Prisma.InputJsonValue, ...(r.status === "POOR_QUALITY" ? { status: "REJECTED", rejectReason: `We could not read this clearly (${r.quality.issues.join(", ") || "low image quality"}). Please upload a sharper, complete scan or photo.` } : {}) },
@@ -294,7 +323,7 @@ export async function addPerson(c: FullCase, input: PersonInput) {
   }
   return db.verificationPerson.create({
     data: {
-      caseId: c.id, role: input.role, fullName: input.full_name.trim(), dateOfBirth: input.date_of_birth ?? null,
+      caseId: c.id, role: input.role, fullName: input.full_name.trim(), nameSource: "USER_ENTERED", dateOfBirth: input.date_of_birth ?? null,
       nationality: input.nationality?.toUpperCase() ?? null, countryOfResidence: input.country_of_residence?.toUpperCase() ?? null,
       ownershipPct: input.ownership_pct ?? null, isPep: !!input.is_pep, panEnc, panMasked, idType: input.id_type ?? null,
     },
@@ -312,7 +341,7 @@ export async function removePerson(c: FullCase, personId: string) {
 export async function submitCase(c: FullCase, actorId?: string) {
   assertEditable(c);
   const req = requirementsOfCase(c);
-  const missing = missingForSubmission(req, { profile: (c.profile ?? {}) as Record<string, unknown>, items: c.items, people: c.people, documents: c.documents });
+  const missing = missingForSubmission(req, { profile: (c.profile ?? {}) as Record<string, unknown>, items: c.items, people: c.people, documents: c.documents, nameStrict: nameMode() === "strict" });
   if (missing.length) throw new KycError("INCOMPLETE", `Still needed: ${missing.map(m => m.label).join("; ")}`, 422);
   const profile = (c.profile ?? {}) as Record<string, any>;
 

@@ -628,13 +628,21 @@ async function main() {
     const res = await fetch(`${BASE}/api/verification/${caseId}/documents`, { method: "POST", headers: { Cookie: jar.cookie }, body: fd });
     return { status: res.status, json: await res.json().catch(() => null) };
   }
-  async function fillDocs(jar, caseId) {
+  // Names come from documents: the test files carry NAME markers the mock OCR reads (business docs: the entity's legal name; IDs: the person's name).
+  const NAMED = (name) => new Blob([Buffer.from(`%PDF-1.4\n1 0 obj<<>>endobj NAME:${name}; ` + Math.random() + "\n%%EOF")], { type: "application/pdf" });
+  async function fillDocs(jar, caseId, legalName) {
     let c = (await api(`/api/verification/${caseId}`, { jar })).json;
+    // a business case needs its legal name from an incorporation/registry document first
+    if (c.kind === "KYB" && legalName && !c.profile.legal_name) await upload(jar, caseId, "CERT_OF_INCORPORATION", null, NAMED(legalName), "inc.pdf");
+    c = (await api(`/api/verification/${caseId}`, { jar })).json;
     for (const m of c.missing.filter(x => x.section === "document")) {
       const spec = c.requirements.documents.find(d => d.type === m.key);
       const targets = spec.perPerson ? c.people.filter(p => !c.documents.some(d => d.type === m.key && d.person_id === p.id)) : [null];
-      for (const p of targets) await upload(jar, caseId, m.key, p?.id ?? null);
+      for (const p of targets) await upload(jar, caseId, m.key, p?.id ?? null, m.key === "ID_PROOF" && p ? NAMED(p.full_name) : PDF());
     }
+    // person names are read from their ID: upload one where a name is still unverified
+    c = (await api(`/api/verification/${caseId}`, { jar })).json;
+    for (const p of c.people.filter(x => x.name_source === "USER_ENTERED")) await upload(jar, caseId, "ID_PROOF", p.id, NAMED(p.full_name), "id.pdf");
     return (await api(`/api/verification/${caseId}`, { jar })).json;
   }
   async function makeStaff(label) {
@@ -688,8 +696,12 @@ async function main() {
   const bank = await api(`/api/verification/${cid}/items/BANK_ACCOUNT`, { method: "PUT", jar: K.jar, body: { value: "HDFC0001234|123456789012" } });
   check("a bank account is verified", bank.json?.result?.status === "VERIFIED");
   check("an unknown profile field is refused", (await api(`/api/verification/${cid}`, { method: "PATCH", jar: K.jar, body: { profile: { hacked: "x" } } })).status === 400);
-  const prof = await api(`/api/verification/${cid}`, { method: "PATCH", jar: K.jar, body: { profile: { legal_name: `Alpha Exports ${uniq} Pvt Ltd`, business_type: "Private limited", industry: "Textile exports", incorporation_date: "2018-04-02", address: "12 MG Road, Pune", expected_monthly_usd: 40000, source_of_funds: "BUSINESS_INCOME" } } });
-  check("profile saved", prof.status === 200 && prof.json.profile.legal_name.includes("Pvt"));
+  const prof = await api(`/api/verification/${cid}`, { method: "PATCH", jar: K.jar, body: { profile: { business_type: "Private limited", industry: "Textile exports", incorporation_date: "2018-04-02", address: "12 MG Road, Pune", expected_monthly_usd: 40000, source_of_funds: "BUSINESS_INCOME" } } });
+  check("profile saved", prof.status === 200 && prof.json.profile.business_type === "Private limited");
+  const typedName = await api(`/api/verification/${cid}`, { method: "PATCH", jar: K.jar, body: { profile: { legal_name: "Typed Name Pvt Ltd" } } });
+  check("a typed legal name is refused: names come from documents and registries", typedName.status === 400 && typedName.json.error.code === "NAME_FROM_DOCUMENT_REQUIRED", JSON.stringify(typedName.json));
+  const incDoc = await upload(K.jar, cid, "CERT_OF_INCORPORATION", null, NAMED(`Alpha Exports ${uniq} Pvt Ltd`), "inc.pdf");
+  check("the legal name now comes from a registry record (it outranks the document's OCR name)", incDoc.json?.profile?.legal_name_source === "REGISTRY" && !!incDoc.json.profile.legal_name, JSON.stringify(incDoc.json?.profile));
   const ubo = await api(`/api/verification/${cid}/people`, { jar: K.jar, body: { role: "UBO", full_name: "Asha Rao", date_of_birth: "1980-05-05", nationality: "IN", country_of_residence: "IN", ownership_pct: 60, pan: "ABCPE1234F" } });
   check("a beneficial owner can be added (PAN masked)", ubo.status === 201 && ubo.json.people[0].pan_masked.endsWith("234F"));
   check("ownership over 100% is refused at submission", (await api(`/api/verification/${cid}/people`, { jar: K.jar, body: { role: "UBO", full_name: "Too Much", ownership_pct: 101 } })).status === 400);
@@ -764,9 +776,16 @@ async function main() {
   const eddOrg = await register("Eddie", "IN");
   const ec = (await api("/api/verification", { method: "POST", jar: eddOrg.jar, body: { purposes: ["EXPORT_SERVICES"] } })).json.id;
   for (const [code, value] of [["PAN", "ABCCE1234F"], ["CIN", "U74999MH2015PTC654321"], ["BANK_ACCOUNT", "HDFC0001234|555566667777"]]) await api(`/api/verification/${ec}/items/${code}`, { method: "PUT", jar: eddOrg.jar, body: { value } });
-  await api(`/api/verification/${ec}`, { method: "PATCH", jar: eddOrg.jar, body: { profile: { legal_name: `Eddie Co ${uniq}`, business_type: "LLP", industry: "Consulting", incorporation_date: "2015-01-01", address: "Delhi", expected_monthly_usd: 20000, source_of_funds: "BUSINESS_INCOME" } } });
+  await api(`/api/verification/${ec}`, { method: "PATCH", jar: eddOrg.jar, body: { profile: { business_type: "LLP", industry: "Consulting", incorporation_date: "2015-01-01", address: "Delhi", expected_monthly_usd: 20000, source_of_funds: "BUSINESS_INCOME" } } });
   for (const [role, pep] of [["UBO", true], ["DIRECTOR", false], ["SIGNATORY", false]]) await api(`/api/verification/${ec}/people`, { jar: eddOrg.jar, body: { role, full_name: "Vikram Sethi", nationality: "IN", country_of_residence: "IN", ownership_pct: role === "UBO" ? 100 : undefined, is_pep: pep, date_of_birth: "1975-01-01" } });
-  await fillDocs(eddOrg.jar, ec);
+  const eddFilled = await fillDocs(eddOrg.jar, ec, `Eddie Co ${uniq}`);
+  check("without a registry hit, the uploaded incorporation document supplies the legal name", eddFilled.profile.legal_name === `Eddie Co ${uniq}` && eddFilled.profile.legal_name_source === "OCR", JSON.stringify(eddFilled.profile));
+  check("a person's name is read from their ID, and the typed value is kept for the reviewer only if different", eddFilled.people.every(p => p.name_source === "OCR"), JSON.stringify(eddFilled.people.map(p => p.name_source)));
+  const sn = await api(`/api/admin/verification/${ec}/name`, { method: "POST", jar: staffJar, body: { target: "profile", name: `Eddie Co ${uniq} LLP`, note: "Name per certificate page 1" } });
+  const snNoNote = await api(`/api/admin/verification/${ec}/name`, { method: "POST", jar: staffJar, body: { target: "profile", name: "X Y", note: "short" } });
+  const snCust = await api(`/api/admin/verification/${ec}/name`, { method: "POST", jar: eddOrg.jar, body: { target: "profile", name: "Hacker Ltd", note: "customer trying it on" } });
+  const afterStaff = (await api(`/api/verification/${ec}`, { jar: eddOrg.jar })).json;
+  check("a staff member can set a legal name with a reason (source STAFF, typed/previous value kept, audited); customers and empty reasons cannot", sn.status === 200 && snNoNote.status === 400 && [401, 403].includes(snCust.status) && afterStaff.profile.legal_name === `Eddie Co ${uniq} LLP` && afterStaff.profile.legal_name_source === "STAFF" && (await db.auditLog.count({ where: { action: "verification.name_set_by_staff" } })) >= 1, JSON.stringify([sn.status, snNoNote.status, snCust.status, afterStaff.profile]));
   const es = await api(`/api/verification/${ec}/submit`, { method: "POST", jar: eddOrg.jar, body: {} });
   check("a PEP beneficial owner forces enhanced due diligence", es.json?.case?.tier === "EDD", JSON.stringify(es.json?.result));
   const ed = await api(`/api/admin/verification/${ec}`, { jar: staffJar });
@@ -783,9 +802,9 @@ async function main() {
   const blkOrg = await register("Blocky", "IN");
   const bc = (await api("/api/verification", { method: "POST", jar: blkOrg.jar, body: { purposes: ["EXPORT_SERVICES"] } })).json.id;
   for (const [code, value] of [["PAN", "ABCCE1234F"], ["CIN", "U74999MH2015PTC777777"], ["BANK_ACCOUNT", "HDFC0001234|888899990001"]]) await api(`/api/verification/${bc}/items/${code}`, { method: "PUT", jar: blkOrg.jar, body: { value } });
-  await api(`/api/verification/${bc}`, { method: "PATCH", jar: blkOrg.jar, body: { profile: { legal_name: `Blocky Co ${uniq}`, business_type: "LLP", industry: "Consulting", incorporation_date: "2015-01-01", address: "Delhi", expected_monthly_usd: 1000, source_of_funds: "BUSINESS_INCOME" } } });
+  await api(`/api/verification/${bc}`, { method: "PATCH", jar: blkOrg.jar, body: { profile: { business_type: "LLP", industry: "Consulting", incorporation_date: "2015-01-01", address: "Delhi", expected_monthly_usd: 1000, source_of_funds: "BUSINESS_INCOME" } } });
   for (const role of ["UBO", "DIRECTOR", "SIGNATORY"]) await api(`/api/verification/${bc}/people`, { jar: blkOrg.jar, body: { role, full_name: "Reza Test", nationality: "IR", country_of_residence: "IN", ownership_pct: role === "UBO" ? 100 : undefined, date_of_birth: "1980-01-01" } });
-  await fillDocs(blkOrg.jar, bc);
+  await fillDocs(blkOrg.jar, bc, `Blocky Co ${uniq}`);
   const bs = await api(`/api/verification/${bc}/submit`, { method: "POST", jar: blkOrg.jar, body: {} });
   check("a prohibited-jurisdiction owner is flagged as blocked in review", bs.status === 202 && bs.json.result.blocked === true, JSON.stringify(bs.json.result));
   const bd = await api(`/api/admin/verification/${bc}`, { jar: staffJar });

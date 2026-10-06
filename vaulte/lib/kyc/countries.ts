@@ -12,6 +12,8 @@ export interface RegistryInfo { name: string; url: string; /** How we use it. */
 /** Where a human (or staff) can confirm an identifier when no API is wired. */
 export const OFFICIAL_REGISTRIES: Record<string, RegistryInfo> = {
   IN: { name: "MCA21 company master data / GST portal taxpayer search", url: "https://www.mca.gov.in/", mode: "AUTO" },
+  NO: { name: "Bronnoysund Register Centre (Enhetsregisteret)", url: "https://www.brreg.no/", mode: "AUTO" },
+  SG: { name: "ACRA (via data.gov.sg)", url: "https://www.acra.gov.sg/", mode: "AUTO" },
   NP: { name: "Office of the Company Registrar (OCR) and Inland Revenue Department PAN search", url: "https://ocr.gov.np/", mode: "MANUAL" },
   US: { name: "State Secretary of State business search / IRS EIN confirmation (CP-575)", url: "https://www.irs.gov/businesses/small-businesses-self-employed/employer-id-numbers", mode: "MANUAL" },
   GB: { name: "Companies House", url: "https://find-and-update.company-information.service.gov.uk/", mode: "KEYED" },
@@ -29,6 +31,9 @@ type Has = (purpose: string) => boolean;
 const item = (code: string, label: string, help: string, required: boolean, validate: (v: string) => string | null, registry?: RegistryCode, country?: string): ItemSpec => ({
   code, label, help, required, validate, autoVerifiable: registry && country ? registrySupports(registry, country) : false, ...(registry ? { registry } : {}),
 });
+
+/** REG_NO is registry-backed only where an open national register is wired (see registries/adapters.ts). */
+const regFor = (c: string): RegistryCode | undefined => (registrySupports("REG_NO", c) ? "REG_NO" : undefined);
 
 export interface BusinessPack { items: ItemSpec[]; documents: DocSpec[]; notes: string[]; entityTypes?: string[] }
 
@@ -56,7 +61,7 @@ export function businessPack(c: string, has: Has): BusinessPack {
   };
   if (isEuCountry(c)) return {
     items: [
-      item("REG_NO", "Company registration number", "As on your national business-register extract", true, validateGenericReg),
+      item("REG_NO", "Company registration number", "As on your national business-register extract. Checked live against the national register where it is open (France SIREN, Czechia IČO, Estonia).", true, validateGenericReg, regFor(c), c),
       item("VAT_ID", "VAT ID", "Checked live against the EU VIES service", goods, validateEuVat(c), "VAT_ID", c),
       item("LEI", "LEI (if you have one)", "Legal Entity Identifier", false, validateLei, "LEI", c),
       bankItem(c),
@@ -134,7 +139,7 @@ export function businessPack(c: string, has: Has): BusinessPack {
   };
   return {
     items: [
-      item("REG_NO", "Company registration number", "As shown on the commercial registry extract", true, validateGenericReg),
+      item("REG_NO", "Company registration number", "As shown on the commercial registry extract. Checked live for Norway (organisation number) and Singapore (UEN).", true, validateGenericReg, regFor(c), c),
       item("TAX_ID", "Tax / VAT number", "VAT or national tax identifier", false, validateGenericReg),
       item("LEI", "LEI (if you have one)", "Legal Entity Identifier", false, validateLei, "LEI", c),
       bankItem(c),
