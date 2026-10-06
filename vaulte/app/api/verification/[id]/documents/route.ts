@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { apiError, apiSuccess } from "@/lib/utils";
 import { hit } from "@/lib/security/ratelimit-db";
 import { MAX_UPLOAD_BYTES, safeFilename, saveEncrypted, sniffFile } from "@/lib/storage";
-import { assertEditable, audit, loadCase, presentCase, requirementsOfCase } from "@/lib/kyc/service";
+import { assertEditable, audit, loadCase, ocrDocument, presentCase, requirementsOfCase } from "@/lib/kyc/service";
 import { customerCase, handleError } from "@/lib/kyc/api";
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
@@ -35,10 +35,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // One live document per (type, person): a new upload replaces a rejected/older one.
     const old = r.c.documents.filter(d => d.type === type && (d.personId ?? null) === personId && d.status !== "ACCEPTED");
     await db.verificationDocument.deleteMany({ where: { id: { in: old.map(d => d.id) } } });
-    await db.verificationDocument.create({
+    const created = await db.verificationDocument.create({
       data: { caseId: r.c.id, personId, type, filename: safeFilename(file.name, kind.ext), mime: kind.mime, size: data.length, sha256, storageKey: key, uploadedById: r.user.id },
     });
-    await audit(r.c.organizationId, r.user.id, "verification.document_uploaded", r.c.id, { type, size: data.length });
+    const ocr = await ocrDocument(created.id, type, data, kind.mime).catch(() => null);
+    await audit(r.c.organizationId, r.user.id, "verification.document_uploaded", r.c.id, { type, size: data.length, ocr: (ocr as { status?: string } | null)?.status ?? null });
     return apiSuccess(presentCase((await loadCase(r.c.id))!), 201);
   } catch (e) { return handleError(e); }
 }

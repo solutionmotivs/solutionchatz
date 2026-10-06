@@ -11,7 +11,9 @@ import { getProvider, type CheckCode, type CheckResult } from "./providers";
 import { type CaseKind, type Requirements, missingForSubmission, progressOf, requirementsFor, validPurposes } from "./requirements";
 import { idTypesFor, registryInfo } from "./countries";
 import { approvalsNeeded, assessRisk, nextReviewDate, tierLimits, type Tier } from "./risk";
+import { hit } from "@/lib/security/ratelimit-db";
 import { mask, normalise } from "./validators";
+import { getKycServices, type PepResult } from "./providers/apisetu/services";
 import { lookupRegistry, nameMatchScore, type RegistryRecord } from "./registries";
 
 export class KycError extends Error {
@@ -50,9 +52,9 @@ export function presentCase(c: FullCase) {
     items: c.items.map(i => ({ code: i.code, masked: i.valueMasked, status: i.status, provider: i.provider, details: i.result, verified_at: i.verifiedAt })),
     people: c.people.map(p => ({
       id: p.id, role: p.role, full_name: p.fullName, date_of_birth: p.dateOfBirth, nationality: p.nationality, country_of_residence: p.countryOfResidence,
-      ownership_pct: p.ownershipPct, is_pep: p.isPep, pan_masked: p.panMasked, pan_status: p.panStatus, id_type: p.idType,
+      ownership_pct: p.ownershipPct, is_pep: p.isPep, pan_masked: p.panMasked, pan_status: p.panStatus, id_type: p.idType, name_source: p.nameSource, pep_check: p.pepCheck,
     })),
-    documents: c.documents.map(d => ({ id: d.id, type: d.type, person_id: d.personId, filename: d.filename, size: d.size, status: d.status, reject_reason: d.rejectReason, uploaded_at: d.createdAt })),
+    documents: c.documents.map(d => ({ id: d.id, type: d.type, person_id: d.personId, filename: d.filename, size: d.size, status: d.status, reject_reason: d.rejectReason, uploaded_at: d.createdAt, ocr: d.ocr })),
     requirements: { profile: req.profile, items: req.items.map(({ validate: _v, ...r }) => r), documents: req.documents, people: req.people, ubo_threshold_pct: req.uboThresholdPct, notes: req.notes, registry_info: registryInfo(c.country), id_types: idTypesFor(c.country) },
     missing, progress: progressOf(req, missing),
   };
@@ -201,6 +203,72 @@ export async function setItem(c: FullCase, code: string, rawValue: string) {
   return { code, status, reason: result?.reason, registered_name: registry?.legalName, source: registry?.source };
 }
 
+/** Document types we read with OCR (identity and registration documents). */
+export const OCR_TYPES = new Set(["ID_PROOF", "PAN_CARD", "CERT_OF_INCORPORATION", "REGISTRY_EXTRACT", "TRADE_LICENCE_COPY", "GST_CERTIFICATE", "IEC_CERTIFICATE"]);
+
+/** Reads the uploaded document and gates on image quality. A poor image is rejected at once with a reason, so reviewers never see unreadable scans. */
+export async function ocrDocument(docId: string, type: string, data: Buffer, mime: string) {
+  const svc = getKycServices();
+  if (!svc || !OCR_TYPES.has(type)) return null;
+  const r = await svc.ocr({ docType: type, data, mime });
+  if (r.status === "UNAVAILABLE") return { status: r.status, reason: r.reason };
+  const ocr = { status: r.status, provider: svc.name, fields: r.fields, quality: r.quality, at: new Date().toISOString() };
+  await db.verificationDocument.update({
+    where: { id: docId },
+    data: { ocr: ocr as Prisma.InputJsonValue, ...(r.status === "POOR_QUALITY" ? { status: "REJECTED", rejectReason: `We could not read this clearly (${r.quality.issues.join(", ") || "low image quality"}). Please upload a sharper, complete scan or photo.` } : {}) },
+  });
+  return ocr;
+}
+
+// CKYC: search sends an OTP to the holder's mobile registered with CKYC; the holder tells us the OTP, and we download the record.
+export async function ckycStart(c: FullCase, i: { idType: "PAN" | "PASSPORT" | "VOTER" | "DL" | "CKYC"; idNumber: string; dob?: string }) {
+  if (c.country !== "IN") throw new KycError("NOT_SUPPORTED", "CKYC is the Indian central KYC registry", 400);
+  assertEditable(c);
+  const svc = getKycServices();
+  if (!svc) throw new KycError("NOT_AVAILABLE", "CKYC lookup is not enabled on this deployment; upload your documents instead", 409);
+  const lim = await hit(`ckyc:${c.organizationId}`, 10, 3600);
+  if (!lim.allowed) throw new KycError("RATE_LIMITED", "Too many CKYC lookups; try again later", 429);
+  const r = await svc.ckycSearch({ ...i, idNumber: normalise(i.idNumber) });
+  await audit(c.organizationId, undefined, "verification.ckyc_search", c.id, { id_type: i.idType, status: r.status });
+  return r;
+}
+
+export async function ckycConfirm(c: FullCase, i: { referenceId: string; otp: string; personId?: string }) {
+  assertEditable(c);
+  const svc = getKycServices();
+  if (!svc) throw new KycError("NOT_AVAILABLE", "CKYC lookup is not enabled on this deployment", 409);
+  const r = await svc.ckycDownload({ referenceId: i.referenceId, otp: i.otp });
+  if (r.status !== "VERIFIED" || !r.name) return { status: r.status, reason: r.reason };
+  // The CKYC record is a government-held source: it fills the person's name (and date of birth) and is stored as an item.
+  const person = i.personId ? c.people.find(p => p.id === i.personId) : c.people.find(p => p.role === "APPLICANT") ?? c.people[0];
+  if (person) await db.verificationPerson.update({ where: { id: person.id }, data: { fullName: r.name, nameSource: "CKYC", ...(r.dob && !person.dateOfBirth ? { dateOfBirth: r.dob } : {}) } });
+  const value = r.ckycMasked ?? "CKYC";
+  await db.verificationItem.upsert({
+    where: { caseId_code: { caseId: c.id, code: "CKYC" } },
+    create: { caseId: c.id, code: "CKYC", valueEnc: encryptString(value), valueMasked: value, valueHash: hmacHex(otpPepper(), `kyc:CKYC:${value}`), status: "VERIFIED", provider: svc.name, result: { name: r.name, ...r.details } as Prisma.InputJsonValue, verifiedAt: new Date() },
+    update: { valueEnc: encryptString(value), valueMasked: value, status: "VERIFIED", provider: svc.name, result: { name: r.name, ...r.details } as Prisma.InputJsonValue, verifiedAt: new Date() },
+  });
+  await audit(c.organizationId, undefined, "verification.ckyc_verified", c.id, { person_id: person?.id ?? null });
+  return { status: "VERIFIED" as const, name: r.name, personId: person?.id ?? null };
+}
+
+/** AML/PEP through the provider (in addition to the local sanctions lists). A PEP match flags the person and raises the risk tier. */
+export async function pepScreen(c: FullCase): Promise<{ checked: number; hits: { name: string; pep: boolean; sanctioned: boolean; adverse: boolean }[]; unavailable: boolean }> {
+  const svc = getKycServices();
+  if (!svc) return { checked: 0, hits: [], unavailable: false };
+  const profile = (c.profile ?? {}) as Record<string, any>;
+  const subjects: { name: string; dob?: string; kind: "INDIVIDUAL" | "ENTITY"; personId?: string }[] = c.people.map(p => ({ name: p.fullName, dob: p.dateOfBirth ?? undefined, kind: "INDIVIDUAL" as const, personId: p.id }));
+  if (c.kind === "KYB" && profile.legal_name) subjects.push({ name: profile.legal_name, kind: "ENTITY" });
+  const hits: { name: string; pep: boolean; sanctioned: boolean; adverse: boolean }[] = []; let unavailable = false;
+  for (const sub of subjects) {
+    const r: PepResult = await svc.amlPep({ name: sub.name, dob: sub.dob, country: c.country, kind: sub.kind });
+    if (r.status === "UNAVAILABLE") { unavailable = true; continue; }
+    if (sub.personId) await db.verificationPerson.update({ where: { id: sub.personId }, data: { pepCheck: { provider: svc.name, status: r.status, pep: r.pep, sanctioned: r.sanctioned, adverseMedia: r.adverseMedia, matches: r.matches.slice(0, 5), at: new Date().toISOString() } as Prisma.InputJsonValue, ...(r.pep ? { isPep: true } : {}) } });
+    if (r.pep || r.sanctioned || r.adverseMedia) hits.push({ name: sub.name, pep: r.pep, sanctioned: r.sanctioned, adverse: r.adverseMedia });
+  }
+  return { checked: subjects.length, hits, unavailable };
+}
+
 export interface PersonInput {
   role: "APPLICANT" | "UBO" | "DIRECTOR" | "SIGNATORY";
   full_name: string; date_of_birth?: string; nationality?: string; country_of_residence?: string;
@@ -266,6 +334,13 @@ export async function submitCase(c: FullCase, actorId?: string) {
     if (r.outcome === "BLOCK") screening = "BLOCK";
     else if (r.outcome === "REVIEW" && screening !== "BLOCK") screening = "REVIEW";
     if (r.outcome !== "CLEAR") hits.push({ name: n.name, match: r.outcome === "BLOCK" ? "CONFIRMED_MATCH" : "POTENTIAL_MATCH", lists: Array.from(new Set(r.matches.map(m => m.list))), score: r.topScore, check_id: r.checkId });
+  }
+
+  // Provider AML/PEP (Indian PEP and adverse-media data the global lists do not carry). Sanctioned = block, PEP = review.
+  const pep = await pepScreen(c).catch(() => ({ checked: 0, hits: [] as { name: string; pep: boolean; sanctioned: boolean; adverse: boolean }[], unavailable: true }));
+  for (const h of pep.hits) {
+    if (h.sanctioned) screening = "BLOCK"; else if (screening !== "BLOCK") screening = "REVIEW";
+    hits.push({ name: h.name, match: h.sanctioned ? "CONFIRMED_MATCH" : h.pep ? "PEP" : "ADVERSE_MEDIA", lists: ["AML_PEP_PROVIDER"], score: 0 });
   }
 
   const fresh = (await loadCase(c.id))!;

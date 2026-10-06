@@ -78,7 +78,7 @@ export class ApisetuServices implements KycServices {
   }
 }
 
-/** Deterministic stand-in. Control it with text inside the test file: NAME:..., DOB:YYYY-MM-DD, ID:..., BLUR:1. Names containing "PEP" return a PEP match. */
+/** Deterministic stand-in. Control it with text inside the test file, separated by semicolons: NAME:...;DOB:YYYY-MM-DD;ID:...;BLUR:1. Names containing "PEP" return a PEP match. */
 export class MockApisetu implements KycServices {
   readonly name = "mock_apisetu";
   async ckycSearch(i: { idNumber: string }): Promise<CkycStart> {
@@ -95,7 +95,7 @@ export class MockApisetu implements KycServices {
   }
   async ocr(i: { data: Buffer }): Promise<OcrResult> {
     const t = i.data.toString("latin1");
-    const get = (k: string) => new RegExp(`${k}:([^\\r\\n\\\\)]+)`).exec(t)?.[1]?.trim();
+    const get = (k: string) => new RegExp(`${k}:([^;\\r\\n\\\\)]+)`).exec(t)?.[1]?.trim();
     const blur = get("BLUR") === "1";
     return { status: blur ? "POOR_QUALITY" : "OK", fields: { name: get("NAME"), dob: get("DOB"), idNumberMasked: get("ID") ? maskId(get("ID")!) : undefined }, quality: { score: blur ? 0.2 : 0.95, issues: blur ? ["image is blurry"] : [] } };
   }
