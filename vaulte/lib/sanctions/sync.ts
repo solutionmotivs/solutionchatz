@@ -3,7 +3,7 @@
 import { createHash, randomUUID } from "crypto";
 import { db } from "@/lib/db";
 import { canonical, normalizeName } from "./normalize";
-import { parseOfac, parseUk, parseUn, type ParsedEntry } from "./parsers";
+import { parseOfac, parseUkStream, parseUn, type ParsedEntry } from "./parsers";
 import { invalidateIndex } from "./screen";
 
 export const SOURCES = {
@@ -17,11 +17,44 @@ export const SOURCES = {
   },
   UK: {
     urls: ["https://sanctionslist.fcdo.gov.uk/docs/UK-Sanctions-List.csv"],
-    parse: (t: string[]) => parseUk(t[0]),
+    parse: (_t: string[]) => [] as ParsedEntry[], // never used: the UK list (about 50 MB) is stream-parsed, see downloadUk()
+    stream: true,
   },
 } as const;
 
 export type ListCode = keyof typeof SOURCES;
+
+/** Streams the UK CSV: hash and parse while downloading so the whole file is never held as one string. */
+export async function downloadUk(url: string, fetchImpl: typeof fetch = fetch): Promise<{ entries: ParsedEntry[]; version: string }> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 180_000);
+    try {
+      const res = await fetchImpl(url, { signal: ctl.signal, headers: { "User-Agent": "vaulte-sanctions-sync/1.0" } });
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      const hash = createHash("sha256");
+      const dec = new TextDecoder("utf-8");
+      const reader = res.body.getReader();
+      async function* chunks() {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) { const tail = dec.decode(); if (tail) yield tail; return; }
+          hash.update(value);
+          yield dec.decode(value, { stream: true });
+        }
+      }
+      const entries = await parseUkStream(chunks());
+      return { entries, version: hash.digest("hex").slice(0, 16) };
+    } catch (e) {
+      lastErr = e;
+      await new Promise(r => setTimeout(r, 1000 * 2 ** attempt));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw new Error(`download failed for ${url}: ${lastErr instanceof Error ? lastErr.message : lastErr}`);
+}
 
 async function download(url: string): Promise<string> {
   let lastErr: unknown;
@@ -82,14 +115,19 @@ export interface SyncResult { list: string; status: "UPDATED" | "UNCHANGED" | "F
 export async function syncList(code: ListCode, opts: { force?: boolean } = {}): Promise<SyncResult> {
   const src = SOURCES[code];
   try {
-    const texts = await Promise.all(src.urls.map(download));
-    const version = createHash("sha256").update(texts.join("\u0000")).digest("hex").slice(0, 16);
+    let texts: string[] = [], version: string, streamed: ParsedEntry[] | null = null;
+    if ("stream" in src && src.stream) {
+      const r = await downloadUk(src.urls[0]); streamed = r.entries; version = r.version;
+    } else {
+      texts = await Promise.all(src.urls.map(download));
+      version = createHash("sha256").update(texts.join("\u0000")).digest("hex").slice(0, 16);
+    }
     const prev = await db.sanctionsList.findUnique({ where: { code } });
     if (prev && prev.version === version && prev.status === "OK" && !opts.force) {
       await db.sanctionsList.update({ where: { code }, data: { fetchedAt: new Date() } });
       return { list: code, status: "UNCHANGED", entries: prev.entryCount, addresses: prev.addressCount };
     }
-    const entries = src.parse(texts as string[]);
+    const entries = streamed ?? src.parse(texts as string[]);
     // Guard against a truncated or malformed download wiping a good list.
     if (!entries.length || (prev && prev.entryCount > 100 && entries.length < prev.entryCount * 0.5)) {
       throw new Error(`parsed ${entries.length} entries (previously ${prev?.entryCount ?? 0}); refusing to replace the list`);

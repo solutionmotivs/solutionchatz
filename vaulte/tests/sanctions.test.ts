@@ -182,3 +182,27 @@ describe("wallet screening: optional Chainalysis source (against a stub)", () =>
     srv.close();
   });
 });
+
+import { CsvStream, parseUkStream } from "../lib/sanctions/parsers";
+describe("streaming CSV (UK list is 50 MB: it must never be one string)", () => {
+  const tricky = 'a,b,c\r\n"x, y",2,"he said ""hi"""\n"multi\nline",,\n1,2,3\nlast,"q"';
+  const collect = (chunk: number) => { const rows: string[][] = []; const s = new CsvStream(r => rows.push(r)); for (let i = 0; i < tricky.length; i += chunk) s.feed(tricky.slice(i, i + chunk)); s.end(); return rows; };
+  it("gives the same rows as the whole-string parser at every chunk size (quotes split across chunks included)", () => {
+    const want = parseCsv(tricky);
+    for (const n of [1, 2, 3, 5, 7, 13, tricky.length]) expect(collect(n), `chunk ${n}`).toEqual(want);
+  });
+  it("UK stream parse equals the string parse, with a BOM and chunks of 1 to 50 characters", async () => {
+    const head = "Last Updated,Unique ID,OFSI Group ID,UN Reference Number,Name 6,Name 1,Name 2,Name 3,Name 4,Name 5,Name type,Alias strength,Title,Name non-latin script,Non-latin script type,Non-latin script language,Regime Name,Designation Type,Designation source,Sanctions Imposed,Other Information,UK Statement of Reasons,Address Line 1,Address Line 2,Address Line 3,Address Line 4,Address Line 5,Address Line 6,Address Postal Code,Address Country,Phone number,Website,Email address,Date Designated,D.O.B,Nationality(/ies)";
+    const csv = "﻿Report Date: 02-Oct-2026\n" + head + "\n" +
+      '04/08/2026,UKX1,1,,HASSAN,Ali,,,,,Primary name,,,,,,Counter Terrorism,Individual,UK,,"reason, with ""quotes""\nand a newline",,,,,,,,Syria,,,,01/01/2020,00/00/1975,Syria\n' +
+      "04/08/2026,UKX1,1,,HASSAN,Aly,,,,,Alias,Good quality,,,,,Counter Terrorism,Individual,UK,,,,,,,,,,,Syria,,,,01/01/2020,00/00/1975,Syria\n" +
+      "04/08/2026,UKX2,2,,ACME TRADING FZE,,,,,,Primary name,,,,,,Russia,Entity,UK,,,,,,,,,,,UAE,,,,01/01/2022,,\n";
+    const want = parseUk(csv);
+    expect(want.map(e => e.externalId)).toEqual(["UKX1", "UKX2"]);
+    for (const n of [1, 10, 50, csv.length]) {
+      async function* gen() { for (let i = 0; i < csv.length; i += n) yield csv.slice(i, i + n); }
+      expect(await parseUkStream(gen()), `chunk ${n}`).toEqual(want);
+    }
+    await expect(parseUkStream((async function* () { yield "no header here\n1,2\n"; })())).rejects.toThrow(/header row not found/);
+  });
+});

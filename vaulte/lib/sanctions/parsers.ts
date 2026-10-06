@@ -95,33 +95,80 @@ export function parseUn(xml: string): ParsedEntry[] {
   return out.filter(e => e.externalId && e.name);
 }
 
-export function parseUk(csv: string): ParsedEntry[] {
-  const rows = parseCsv(csv);
-  // Row 0 is the report date line; the header is the first row containing "Unique ID".
-  const hi = rows.findIndex(r => r.includes("Unique ID"));
-  if (hi < 0) throw new Error("UK list: header row not found");
-  const h = rows[hi];
-  const col = (n: string) => h.indexOf(n);
-  const [cId, cType, cReg, cDes, cDob, cNat, cCtry] = [col("Unique ID"), col("Name type"), col("Regime Name"), col("Designation Type"), col("D.O.B"), col("Nationality(/ies)"), col("Address Country")];
-  const nameCols = ["Name 1", "Name 2", "Name 3", "Name 4", "Name 5", "Name 6"].map(col);
-  const byId = new Map<string, ParsedEntry>();
-  for (const r of rows.slice(hi + 1)) {
-    const id = (r[cId] ?? "").trim();
-    if (!id) continue;
-    const name = nameCols.map(c => (r[c] ?? "").trim()).filter(Boolean).join(" ");
-    if (!name) continue;
-    const des = (r[cDes] ?? "").trim().toLowerCase();
-    let e = byId.get(id);
+/** Incremental RFC 4180 tokenizer: feed text chunks, get each completed row through the callback. Memory stays at one row. */
+export class CsvStream {
+  private row: string[] = []; private field = ""; private inQ = false; private pendingQuote = false; private first = true;
+  constructor(private onRow: (row: string[]) => void) {}
+  feed(chunk: string) {
+    let s = chunk;
+    if (this.first && s.length) { this.first = false; if (s.charCodeAt(0) === 0xfeff) s = s.slice(1); }
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (this.pendingQuote) {          // previous char was a quote inside a quoted field
+        this.pendingQuote = false;
+        if (c === '"') { this.field += '"'; continue; }
+        this.inQ = false;                // it closed the field: fall through and treat c normally
+      }
+      if (this.inQ) { if (c === '"') this.pendingQuote = true; else this.field += c; }
+      else if (c === '"') this.inQ = true;
+      else if (c === ",") { this.row.push(this.field); this.field = ""; }
+      else if (c === "\n") { this.row.push(this.field); this.onRow(this.row); this.row = []; this.field = ""; }
+      else if (c !== "\r") this.field += c;
+    }
+  }
+  end() {
+    if (this.pendingQuote) { this.pendingQuote = false; this.inQ = false; }
+    if (this.field.length || this.row.length) { this.row.push(this.field); this.onRow(this.row); }
+    this.row = []; this.field = "";
+  }
+}
+
+/** Builds UK entries row by row (only the columns it needs are kept). */
+export class UkIngest {
+  private h: string[] | null = null;
+  private idx = { id: -1, type: -1, reg: -1, des: -1, dob: -1, nat: -1, ctry: -1, names: [] as number[] };
+  private byId = new Map<string, ParsedEntry>();
+  row(r: string[]) {
+    if (!this.h) {
+      if (!r.includes("Unique ID")) return; // report-date line(s) before the header
+      this.h = r; const col = (n: string) => r.indexOf(n);
+      this.idx = { id: col("Unique ID"), type: col("Name type"), reg: col("Regime Name"), des: col("Designation Type"), dob: col("D.O.B"), nat: col("Nationality(/ies)"), ctry: col("Address Country"), names: ["Name 1", "Name 2", "Name 3", "Name 4", "Name 5", "Name 6"].map(col) };
+      return;
+    }
+    const x = this.idx;
+    const id = (r[x.id] ?? "").trim();
+    if (!id) return;
+    const name = x.names.map(c => (r[c] ?? "").trim()).filter(Boolean).join(" ");
+    if (!name) return;
+    const des = (r[x.des] ?? "").trim().toLowerCase();
+    let e = this.byId.get(id);
     if (!e) {
       e = { externalId: id, kind: des === "individual" ? "INDIVIDUAL" : des === "ship" ? "VESSEL" : "ENTITY", name: "", aliases: [], birthYears: [], countries: [], programs: [], addresses: [] };
-      byId.set(id, e);
+      this.byId.set(id, e);
     }
-    const isPrimary = /^primary name$/i.test((r[cType] ?? "").trim());
+    const isPrimary = /^primary name$/i.test((r[x.type] ?? "").trim());
     if (isPrimary && !e.name) e.name = name; else if (name !== e.name) e.aliases.push(name);
-    if (r[cDob]) e.birthYears.push(...years(r[cDob]));
-    if (r[cNat]) e.countries.push(...r[cNat].split(/[|;]/).map(x => x.trim().toLowerCase()).filter(Boolean));
-    if (r[cCtry]) e.countries.push(r[cCtry].trim().toLowerCase());
-    if (r[cReg]) e.programs.push(r[cReg].trim());
+    if (r[x.dob]) e.birthYears.push(...years(r[x.dob]));
+    if (r[x.nat]) e.countries.push(...r[x.nat].split(/[|;]/).map(v => v.trim().toLowerCase()).filter(Boolean));
+    if (r[x.ctry]) e.countries.push(r[x.ctry].trim().toLowerCase());
+    if (r[x.reg]) e.programs.push(r[x.reg].trim());
   }
-  return Array.from(byId.values()).map(e => ({ ...e, name: e.name || e.aliases[0] || "", aliases: uniq(e.aliases.filter(a => a !== e.name)), birthYears: uniq(e.birthYears), countries: uniq(e.countries), programs: uniq(e.programs) })).filter(e => e.name);
+  finish(): ParsedEntry[] {
+    if (!this.h) throw new Error("UK list: header row not found");
+    return Array.from(this.byId.values()).map(e => ({ ...e, name: e.name || e.aliases[0] || "", aliases: uniq(e.aliases.filter(a => a !== e.name)), birthYears: uniq(e.birthYears), countries: uniq(e.countries), programs: uniq(e.programs) })).filter(e => e.name);
+  }
+}
+
+export function parseUk(csv: string): ParsedEntry[] {
+  const u = new UkIngest(); const t = new CsvStream(r => u.row(r));
+  t.feed(csv); t.end();
+  return u.finish();
+}
+
+/** Streaming variant: feed decoded text chunks as they arrive (a 50 MB list never sits in memory as one string). */
+export async function parseUkStream(chunks: AsyncIterable<string>): Promise<ParsedEntry[]> {
+  const u = new UkIngest(); const t = new CsvStream(r => u.row(r));
+  for await (const c of chunks) t.feed(c);
+  t.end();
+  return u.finish();
 }
