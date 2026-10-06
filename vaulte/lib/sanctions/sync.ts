@@ -5,6 +5,9 @@ import { db } from "@/lib/db";
 import { canonical, normalizeName } from "./normalize";
 import { parseOfac, parseUkStream, parseUn, type ParsedEntry } from "./parsers";
 import { invalidateIndex } from "./screen";
+import { log } from "@/lib/log";
+
+const mem = (stage: string, extra: Record<string, unknown> = {}) => { const m = process.memoryUsage(); log("info", "sanctions sync", { stage, rssMB: Math.round(m.rss / 1e6), heapMB: Math.round(m.heapUsed / 1e6), ...extra }); };
 
 export const SOURCES = {
   OFAC_SDN: {
@@ -117,7 +120,7 @@ export async function syncList(code: ListCode, opts: { force?: boolean } = {}): 
   try {
     let texts: string[] = [], version: string, streamed: ParsedEntry[] | null = null;
     if ("stream" in src && src.stream) {
-      const r = await downloadUk(src.urls[0]); streamed = r.entries; version = r.version;
+      mem("uk:download:start"); const r = await downloadUk(src.urls[0]); streamed = r.entries; version = r.version; mem("uk:parsed", { entries: r.entries.length });
     } else {
       texts = await Promise.all(src.urls.map(download));
       version = createHash("sha256").update(texts.join("\u0000")).digest("hex").slice(0, 16);
@@ -132,7 +135,7 @@ export async function syncList(code: ListCode, opts: { force?: boolean } = {}): 
     if (!entries.length || (prev && prev.entryCount > 100 && entries.length < prev.entryCount * 0.5)) {
       throw new Error(`parsed ${entries.length} entries (previously ${prev?.entryCount ?? 0}); refusing to replace the list`);
     }
-    await storeList(code, entries, { version, sourceUrl: src.urls[0] });
+    mem("store:start", { code, entries: entries.length }); await storeList(code, entries, { version, sourceUrl: src.urls[0] }); mem("store:done", { code });
     return { list: code, status: "UPDATED", entries: entries.length, addresses: entries.reduce((s, e) => s + e.addresses.length, 0) };
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e);

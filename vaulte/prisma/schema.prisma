@@ -840,6 +840,10 @@ model VerificationPerson {
   idType             String?
   idMasked           String?
   screening          Json?
+  /// Where fullName came from: OCR | CKYC | REGISTRY | STAFF | USER_ENTERED_LEGACY
+  nameSource         String?
+  /// AML/PEP provider result (never raw national ID numbers)
+  pepCheck           Json?
 
   caseId    String
   case      VerificationCase       @relation(fields: [caseId], references: [id], onDelete: Cascade)
@@ -861,6 +865,8 @@ model VerificationDocument {
   status       String  @default("UPLOADED") // UPLOADED | ACCEPTED | REJECTED
   rejectReason String?
   uploadedById String?
+  /// Fields read from the document by OCR (name, date of birth, ID number, expiry) plus an image-quality verdict. Names come from here, not from typing.
+  ocr          Json?
 
   caseId   String
   case     VerificationCase    @relation(fields: [caseId], references: [id], onDelete: Cascade)
