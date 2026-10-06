@@ -1,6 +1,7 @@
 // Orchestration for stablecoin / fiat cross-border transfers.
 // Vaulte never custodies funds: partners receive money, convert, and pay out. This service
 // picks routes, enforces guardrails, keeps the memo ledger, and reacts to partner events.
+import { closedCountryList, currencyStatus, expOf } from "@/lib/currency";
 import { buildTiming, type Timing } from "@/lib/routing/timing";
 import { corridorTiming } from "@/lib/routing/settlement-metrics";
 import { closedCountries } from "@/lib/routing/corridors";
@@ -179,6 +180,11 @@ export async function evaluateQuote(orgId: string, input: QuoteInput, opts: { ig
     throw new ServiceError("VALIDATION_ERROR", "source_amount must be a positive integer (minor units)", 400);
   }
   const { sender, recipient } = await loadEntities(orgId, input.senderEntityId, input.recipientEntityId);
+  // Closed by default, in test mode too: a legal perimeter decision (sanctions), not something a customer or an API flag can open.
+  const shut = [input.sourceCurrency, input.destCurrency].filter(c => currencyStatus(c) === "CLOSED");
+  if (shut.length) throw new ServiceError("CURRENCY_CLOSED", `${Array.from(new Set(shut)).join(", ")} payments are not available. This currency is closed for legal reasons and is opened only after written legal clearance.`, 422);
+  const shutCountries = [sender.country, recipient.country].map(c => c.toUpperCase()).filter(c => closedCountryList().has(c));
+  if (shutCountries.length) throw new ServiceError("COUNTRY_CLOSED", `Payments to or from ${Array.from(new Set(shutCountries)).join(", ")} are not available. These countries are closed for legal reasons and are opened only after written legal clearance.`, 422);
   const rates = await getRateTable([input.sourceCurrency, input.destCurrency, "INR"]).catch(e => {
     throw new ServiceError("UNSUPPORTED_CURRENCY", e instanceof Error ? e.message : "Rate unavailable", 422);
   });
@@ -240,7 +246,7 @@ export async function evaluateQuote(orgId: string, input: QuoteInput, opts: { ig
   const margin = validateMargin(breakdown);
   if (!margin.ok) throw new ServiceError("PRICING_REJECTED", margin.reason ?? "Quote rejected", 422);
 
-  const destAmountMinor = Math.floor(fromUsd(breakdown.destAmountUsd, input.destCurrency, rates) * 100);
+  const destAmountMinor = Math.floor(fromUsd(breakdown.destAmountUsd, input.destCurrency, rates) * 10 ** expOf(input.destCurrency));
   const measured = await corridorTiming(sender.country, recipient.country, sandbox).catch(() => null);
   const timing = buildTiming(chosen, recipient.country, measured);
   return { routes: ranked, chosen, breakdown, guard, sourceAmountUsd, destAmountMinor, sender, recipient, timing };
@@ -777,8 +783,8 @@ export async function createQuoteForDestination(
   const rates = await getRateTable([input.sourceCurrency, input.destCurrency]).catch(e => {
     throw new ServiceError("UNSUPPORTED_CURRENCY", e instanceof Error ? e.message : "Rate unavailable", 422);
   });
-  let source = Math.ceil(fromUsd(toUsd(input.destAmount, input.destCurrency, rates), input.sourceCurrency, rates) * 100) / 100;
-  let sourceMinor = Math.ceil(source * 100);
+  const sourceMajor = fromUsd(toUsd(input.destAmount, input.destCurrency, rates), input.sourceCurrency, rates);
+  let sourceMinor = Math.ceil(sourceMajor * 10 ** expOf(input.sourceCurrency));
   for (let i = 0; i < 4; i++) {
     const q = await evaluateQuote(orgId, { ...input, sourceAmount: sourceMinor });
     const short = input.destAmount - q.destAmountMinor;

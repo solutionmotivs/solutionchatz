@@ -1,5 +1,6 @@
 // FX aggregator: ask every enabled provider for a firm quote, turn each into a routable leg, and let the route engine
 // pick the cheapest. Providers: Airwallex (when configured) and the sandbox desks (development only).
+import { minorToMajor } from "@/lib/currency";
 import type { Leg, FxSummary, TransferKindT } from "@/lib/stablecoin/types";
 import { airwallexFxProvider } from "./providers/airwallex";
 import { currencycloudFxProvider } from "./providers/currencycloud";
@@ -70,7 +71,7 @@ export async function buildLiveLegs(a: LiveArgs): Promise<LiveLegs> {
   if (!providers.length) return none;
 
   const settled = await Promise.allSettled(providers.map(p =>
-    withTimeout(p.quote({ sourceCurrency: a.sourceCurrency, destCurrency: a.destCurrency, sourceAmountMinor: a.sourceAmountMinor, destCountry: a.destCountry }, { destPerSource: a.midDestPerSource, usdPerSource: a.sourceAmountUsd / (a.sourceAmountMinor / 100) }), a.timeoutMs ?? 6000)));
+    withTimeout(p.quote({ sourceCurrency: a.sourceCurrency, destCurrency: a.destCurrency, sourceAmountMinor: a.sourceAmountMinor, destCountry: a.destCountry }, { destPerSource: a.midDestPerSource, usdPerSource: a.sourceAmountUsd / minorToMajor(a.sourceAmountMinor, a.sourceCurrency) }), a.timeoutMs ?? 6000)));
   const out: LiveLegs = { legs: [], quotes: [], errors: [] };
   settled.forEach((r, i) => {
     if (r.status === "rejected") { out.errors.push({ provider: providers[i].id, error: r.reason instanceof Error ? r.reason.message : String(r.reason) }); return; }

@@ -32,6 +32,8 @@ export const RAILS: Record<string, RailInfo> = {
   UPI: { label: "UPI", region: "India", etaSec: 30, instant: true, alwaysOn: true },
   RTGS: { label: "RTGS", region: "India", etaSec: 1800, instant: false, alwaysOn: true },
   NEFT: { label: "NEFT", region: "India", etaSec: 2 * 3600, instant: false, alwaysOn: true },
+  INTERAC: { label: "Interac e-Transfer / RTR", region: "Canada", etaSec: 90, instant: true, alwaysOn: true },
+  CIPS: { label: "CIPS (offshore/onshore yuan clearing)", region: "China/HK", etaSec: 4 * 3600, instant: false, alwaysOn: false },
   ONCHAIN: { label: "On-chain", region: "Global", etaSec: 60, instant: true, alwaysOn: true },
 };
 
@@ -50,7 +52,9 @@ export function localRailFor(currency: string, country: string, opts: { urgent?:
     case "SGD": return c === "SG" ? "FAST" : null;
     case "AUD": return c === "AU" ? "NPP" : null;
     case "HKD": return c === "HK" ? "FPS_HK" : null;
-    case "CAD": return c === "CA" ? "EFT_CA" : null;
+    case "CAD": return c === "CA" ? (opts.urgent ? "INTERAC" : "EFT_CA") : null;
+    case "CNH": return c === "HK" || c === "CN" ? "CIPS" : null;
+    case "CNY": return c === "CN" ? "CIPS" : null;
     case "JPY": return c === "JP" ? "ZENGIN" : null;
     case "AED": return c === "AE" ? "UAEFTS" : null;
     default: return null;

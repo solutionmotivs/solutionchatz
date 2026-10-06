@@ -22,7 +22,7 @@ export interface RouteOptions {
   unavailablePartners?: string[];
 }
 
-const HUB_CURRENCIES = ["USD", "AED", "EUR", "GBP", "SGD"];
+const HUB_CURRENCIES = ["USD", "AED", "EUR", "GBP", "SGD", "CAD", "AUD", "JPY", "HKD", "CNH"];
 
 export function tokenAllowedOnLeg(leg: Leg, token: Token): boolean {
   const rule = JURISDICTION_TOKEN_RULES[leg.jurisdiction];

@@ -14,6 +14,7 @@ export const RAIL_WINDOWS: Record<string, RailWindow> = {
   ACH_SAME_DAY: { tz: "America/New_York", openHour: 8, closeHour: 14, country: "US" },
   FEDWIRE: { tz: "America/New_York", openHour: 9, closeHour: 18, country: "US" },
   EFT_CA: { tz: "America/Toronto", openHour: 8, closeHour: 16, country: "CA" },
+  CIPS: { tz: "Asia/Shanghai", openHour: 9, closeHour: 20, country: "CN" },
   UAEFTS: { tz: "Asia/Dubai", openHour: 8, closeHour: 15, country: "AE" },
 };
 

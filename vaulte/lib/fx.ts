@@ -67,6 +67,7 @@ export async function getLiveRates(
     AED: 3.6725, CHF: 0.8841, JPY: 149.5, CAD: 1.3612,
     AUD: 1.5231, SEK: 10.42, NOK: 10.58, MYR: 4.72,
     THB: 35.2, IDR: 15680, PHP: 55.8, SAR: 3.75,
+    CNH: 7.13, CNY: 7.12, HKD: 7.8, NZD: 1.66, DKK: 6.87, PLN: 3.95, NPR: 133.5,
   };
 
   // Never quote real money from a hard-coded table: in production a missing live rate means "no quote".

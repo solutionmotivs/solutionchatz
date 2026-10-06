@@ -1,4 +1,5 @@
 "use client";
+import { fmtMinor } from "@/lib/currency";
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 
@@ -45,9 +46,7 @@ export default function PublicPayPage({ invoice, payToken }: Props) {
     return () => clearInterval(id);
   }, [payStep, pay, payToken]);
 
-  const fmt = (n: number) => new Intl.NumberFormat("en-US", {
-    style: "currency", currency: invoice.currency,
-  }).format(n / 100);
+  const fmt = (n: number) => fmtMinor(n, invoice.currency);
 
   const paid = isPaid(invoice.status);
   const isProforma = invoice.kind === "PROFORMA";
@@ -250,7 +249,7 @@ export default function PublicPayPage({ invoice, payToken }: Props) {
                       <div className="border border-ink/10 p-4 space-y-3">
                         <div>
                           <div className="label-text">Send exactly</div>
-                          <div className="font-serif text-2xl text-ink">{pay.funding_instructions.currency} {((pay.funding_instructions.amount ?? 0) / 100).toLocaleString("en-US", { minimumFractionDigits: 2 })}</div>
+                          <div className="font-serif text-2xl text-ink">{fmtMinor(pay.funding_instructions.amount ?? 0, pay.funding_instructions.currency ?? "USD")}</div>
                         </div>
                         {Object.entries(pay.funding_instructions.bank_details).map(([k, v]) => (
                           <div key={k}><div className="label-text">{k.replace(/_/g, " ")}</div><div className="font-mono text-[11px] text-ink break-all select-all">{v}</div></div>

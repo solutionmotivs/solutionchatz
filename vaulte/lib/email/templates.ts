@@ -1,3 +1,4 @@
+import { fmtMinor } from "@/lib/currency";
 // lib/email/templates.ts
 // All Vaulte email templates — inline HTML, no external deps
 
@@ -137,14 +138,12 @@ export function invoiceEmail(opts: {
   lineItems: { description: string; quantity: number; unitPrice: number; total: number }[];
   poweredBy: boolean;
 }): EmailTemplate {
-  const amountFormatted = new Intl.NumberFormat("en-US", {
-    style: "currency", currency: opts.currency,
-  }).format(opts.amount / 100);
+  const amountFormatted = fmtMinor(opts.amount, opts.currency);
 
   const itemRows = opts.lineItems.map(li => `
     <tr>
       <td>${esc(li.description)} × ${li.quantity}</td>
-      <td>${new Intl.NumberFormat("en-US", { style: "currency", currency: opts.currency }).format(li.total / 100)}</td>
+      <td>${fmtMinor(li.total, opts.currency)}</td>
     </tr>
   `).join("");
 
@@ -186,9 +185,7 @@ export function paymentSettledEmail(opts: {
   paymentId: string;
   settledAt: string;
 }): EmailTemplate {
-  const amountFormatted = new Intl.NumberFormat("en-US", {
-    style: "currency", currency: opts.currency,
-  }).format(opts.amount / 100);
+  const amountFormatted = fmtMinor(opts.amount, opts.currency);
 
   return {
     subject: `✓ Payment settled — ${amountFormatted} to ${opts.recipientName}`,
@@ -219,9 +216,7 @@ export function paymentFailedEmail(opts: {
   paymentId: string;
   reason: string;
 }): EmailTemplate {
-  const amountFormatted = new Intl.NumberFormat("en-US", {
-    style: "currency", currency: opts.currency,
-  }).format(opts.amount / 100);
+  const amountFormatted = fmtMinor(opts.amount, opts.currency);
 
   return {
     subject: `Payment failed — ${amountFormatted}`,

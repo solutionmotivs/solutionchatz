@@ -1277,7 +1277,8 @@ async function main() {
   server.close();
 
   console.log("== Settlement timing (measured, not promised)");
-  const doneT = await db.transfer.findMany({ where: { status: "COMPLETED", fundedAt: { not: null } }, take: 3 });
+  await db.auditLog.deleteMany({ where: { action: "transfer.slow" } });
+  const doneT = await db.transfer.findMany({ where: { status: "COMPLETED", fundedAt: { not: null } }, orderBy: { completedAt: "desc" }, take: 3 });
   check("completed transfers record when the partner confirmed funds (start of the measured clock)", doneT.length > 0 && doneT.every(x => x.completedAt >= x.fundedAt), String(doneT.length));
   const stats = await api("/api/admin/settlement-stats", { jar: staffJar });
   check("staff see measured settlement times per corridor", stats.status === 200 && stats.json.corridors.length > 0 && stats.json.corridors.every(c => c.samples > 0 && c.p90_seconds >= c.p50_seconds), JSON.stringify(stats.json).slice(0, 200));
@@ -1289,6 +1290,42 @@ async function main() {
   const wd2 = await (await fetch(`${BASE}/api/internal/transfers/watchdog`, { method: "POST", headers: { "x-cron-secret": process.env.CRON_SECRET } })).json();
   check("the watchdog needs the cron secret, flags a transfer in flight past twice its quoted time once, and does not flag it again", wd0.status === 401 && wd1.flagged?.includes(slowT.id) && !wd2.flagged?.includes(slowT.id) && (await db.auditLog.count({ where: { action: "transfer.slow", resourceId: slowT.id } })) === 1, JSON.stringify([wd0.status, wd1, wd2]));
   await db.transfer.update({ where: { id: slowT.id }, data: { status: "COMPLETED", fundedAt: slowT.fundedAt } });
+
+  console.log("== Currencies and corridors (any currency to INR, majors, closed currencies)");
+  const cur = await api("/api/currencies");
+  const curOf = c => cur.json.currencies.find(x => x.code === c);
+  check("the currency list shows decimals, and RUB is closed", cur.status === 200 && curOf("JPY")?.decimals === 0 && curOf("USD")?.decimals === 2 && curOf("CNH") && curOf("RUB")?.status === "CLOSED" && curOf("CAD")?.status === "OPEN", JSON.stringify(cur.json).slice(0, 200));
+  const mk = async (name, country, currency) => { const id = await entity(A.key, `${name} ${uniq}`, country, currency); await verify(id); return id; };
+  const usSender = await mk("US Sender", "US", "USD");
+  const inRecv = await mk("India Receiver", "IN", "INR");
+  const quoteFor = (sender, recipient, src, dst, minor, funding, token) => api("/api/quotes", { method: "POST", key: A.key, body: { kind: "BUSINESS", sender_entity_id: sender, recipient_entity_id: recipient, source_currency: src, dest_currency: dst, source_amount: minor, funding_method: funding, ...(token ? { token } : {}) } });
+  for (const [cc, ccy] of [["IN", "INR"], ["AE", "AED"], ["SG", "SGD"], ["DE", "EUR"], ["GB", "GBP"], ["CA", "CAD"], ["AU", "AUD"], ["JP", "JPY"], ["HK", "HKD"], ["HK", "CNH"]]) {
+    const rid = cc === "IN" ? inRecv : await mk(`Recv ${ccy}`, cc, ccy);
+    const q1 = await quoteFor(usSender, rid, "USD", ccy, 100000, "STABLECOIN", "USDC");
+    check(`USDC (USD 1,000) lands as ${ccy} in ${cc}: a quote with timing`, q1.status === 201 && q1.json.destination.currency === ccy && q1.json.destination.amount > 0 && !!q1.json.timing, JSON.stringify(q1.json?.error ?? q1.json?.destination));
+  }
+  const jpOut = await mk("Recv JPY 2", "JP", "JPY");
+  const q2 = await quoteFor(usSender, jpOut, "USD", "JPY", 100000, "STABLECOIN", "USDC");
+  check("yen has no decimals: USD 1,000 pays out roughly 130,000-170,000 whole yen", q2.status === 201 && q2.json.destination.amount > 130000 && q2.json.destination.amount < 170000, JSON.stringify(q2.json?.destination));
+  const usdtJp = await quoteFor(usSender, jpOut, "USD", "JPY", 100000, "STABLECOIN", "USDT");
+  check("USDT is refused where the market rules do not allow it (Japan, Canada, EU), with a clear error", usdtJp.status === 422 && usdtJp.json.error.code === "NO_ROUTE", JSON.stringify(usdtJp.json?.error));
+  check("USDT works where a partner market allows it (Australia)", (await quoteFor(usSender, await mk("Recv AUD 2", "AU", "AUD"), "USD", "AUD", 100000, "STABLECOIN", "USDT")).status === 201);
+  for (const [cc, ccy, minor] of [["AE", "AED", 367250], ["DE", "EUR", 92000], ["GB", "GBP", 78500], ["CA", "CAD", 136000], ["AU", "AUD", 152000], ["JP", "JPY", 150000], ["HK", "HKD", 780000], ["HK", "CNH", 713000]]) {
+    const sid = await mk(`Pay ${ccy}`, cc, ccy);
+    const qf = await quoteFor(sid, inRecv, ccy, "INR", minor, "FIAT_LOCAL");
+    check(`${ccy} (about USD 1,000) to INR: fiat in, rupees land in India through an authorised partner`, qf.status === 201 && qf.json.route.legs.at(-1).kind === "INDIA_PAYOUT" && qf.json.source.amount === minor && qf.json.breakdown.sourceAmountUsd > 800 && qf.json.breakdown.sourceAmountUsd < 1250, JSON.stringify(qf.json?.error ?? qf.json?.breakdown?.sourceAmountUsd));
+  }
+  const usdCnh = await quoteFor(await mk("Pay USD 3", "US", "USD"), await mk("Recv CNH 2", "HK", "CNH"), "USD", "CNH", 100000, "FIAT_LOCAL");
+  check("dollars to offshore yuan quotes through the FX desks over the CIPS clearing rail, which has banking-hour windows", usdCnh.status === 201 && usdCnh.json.route.legs[0].rails.includes("CIPS"), JSON.stringify(usdCnh.json?.error ?? usdCnh.json?.route?.legs?.[0]?.rails));
+  const ruRecv = await entity(A.key, `Ru Recv ${uniq}`, "RU", "RUB");
+  const rub = await quoteFor(usSender, ruRecv, "USD", "RUB", 100000, "STABLECOIN", "USDC");
+  check("RUB is closed whatever the mode: CURRENCY_CLOSED", rub.status === 422 && rub.json.error.code === "CURRENCY_CLOSED", JSON.stringify(rub.json?.error));
+  const ruUsd = await entity(A.key, `Ru Usd ${uniq}`, "RU", "USD");
+  const ruC = await quoteFor(usSender, ruUsd, "USD", "USD", 100000, "STABLECOIN", "USDC");
+  check("a Russian recipient is closed even in dollars: COUNTRY_CLOSED", ruC.status === 422 && ruC.json.error.code === "COUNTRY_CLOSED", JSON.stringify(ruC.json?.error));
+  const ruSender = await quoteFor(ruUsd, usSender, "USD", "USD", 100000, "STABLECOIN", "USDC");
+  check("and a Russian sender", ruSender.status === 422 && ruSender.json.error.code === "COUNTRY_CLOSED", JSON.stringify(ruSender.json?.error));
+  check("CNY onshore is fiat only: no stablecoin route into mainland China", (await quoteFor(usSender, await mk("Recv CNY", "CN", "CNY"), "USD", "CNY", 100000, "STABLECOIN", "USDC")).status === 422);
 
   console.log("== Partner webhook endpoint");
   const body = JSON.stringify({ id: `evt_${uniq}`, type: "deposit.detected", data: { address: "nope" } });

@@ -1,3 +1,4 @@
+import { fmtMinor } from "@/lib/currency";
 // /dashboard/transfers — cross-border transfers, virtual accounts and Vaulte markup earned.
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -6,8 +7,7 @@ import { getAuthUser } from "@/lib/auth";
 
 const usd = (cents: bigint | number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(Number(cents) / 100);
-const money = (minor: bigint, currency: string) =>
-  new Intl.NumberFormat("en-US", { style: "currency", currency }).format(Number(minor) / 100);
+const money = (minor: bigint, currency: string) => fmtMinor(minor, currency);
 
 export default async function TransfersPage() {
   const user = await getAuthUser();

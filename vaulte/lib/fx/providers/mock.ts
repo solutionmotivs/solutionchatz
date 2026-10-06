@@ -2,7 +2,7 @@
 import { localRailFor, railEta } from "@/lib/routing/rails";
 import type { FxProvider, FxQuote, FxQuoteRequest } from "./types";
 
-const MAJORS = new Set(["USD", "EUR", "GBP", "AED", "SGD", "AUD", "CAD", "HKD", "JPY", "CHF"]);
+const MAJORS = new Set(["USD", "EUR", "GBP", "AED", "SGD", "AUD", "CAD", "HKD", "JPY", "CHF", "NZD", "CNH", "CNY"]);
 
 export class MockFxDesk implements FxProvider {
   constructor(readonly id: string, private spreadBps: number, private feeUsd: number, private jurisdiction = "UK") {}

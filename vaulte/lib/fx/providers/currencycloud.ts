@@ -1,3 +1,4 @@
+import { majorString } from "@/lib/currency";
 import { currencycloudFromEnv, type CurrencycloudClient } from "@/lib/psp/currencycloud/client";
 import { localRailFor, railEta } from "@/lib/routing/rails";
 import type { FxProvider, FxQuote, FxQuoteRequest } from "./types";
@@ -9,7 +10,7 @@ export class CurrencycloudFxProvider implements FxProvider {
   constructor(private client: CurrencycloudClient) {}
   supports(s: string, d: string) { return s !== d && SUPPORTED.has(s) && SUPPORTED.has(d); }
   async quote(req: FxQuoteRequest, _mid?: unknown): Promise<FxQuote> {
-    const r = await this.client.detailedRate({ sellCurrency: req.sourceCurrency, buyCurrency: req.destCurrency, sellAmount: (req.sourceAmountMinor / 100).toFixed(2) });
+    const r = await this.client.detailedRate({ sellCurrency: req.sourceCurrency, buyCurrency: req.destCurrency, sellAmount: majorString(req.sourceAmountMinor, req.sourceCurrency) });
     const buy = Number(r.client_buy_amount), sell = Number(r.client_sell_amount);
     const rate = buy > 0 && sell > 0 ? buy / sell : null;
     if (!rate) throw new Error("Currencycloud quote had no usable amounts");

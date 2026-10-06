@@ -1,3 +1,4 @@
+import { majorString } from "@/lib/currency";
 // Airwallex as a payout/funding partner for non-India corridors (no INR: Airwallex is not an RBI-authorised PA-CB).
 //
 // CUSTODY WARNING: Airwallex pays out from a wallet balance. If Vaulte funds that wallet from one Vaulte-owned account,
@@ -55,7 +56,7 @@ export class AirwallexPartner implements StablecoinPartner {
     if (!beneficiaryId) throw new Error("Airwallex did not return a beneficiary id");
     const tr = await this.client.createTransfer({
       requestId: requestId("transfer", req.transferId), beneficiaryId, sourceCurrency, transferCurrency: req.destCurrency,
-      transferAmount: (Number(req.destAmountMinor) / 100).toFixed(2), method, reason: REASON_BY_PURPOSE(req.purposeCode),
+      transferAmount: majorString(req.destAmountMinor, req.destCurrency), method, reason: REASON_BY_PURPOSE(req.purposeCode),
       reference: (req.invoiceNumber ?? req.transferId).slice(0, 30), quoteId: leg.live?.quoteId,
     });
     return { partnerRef: tr.id };

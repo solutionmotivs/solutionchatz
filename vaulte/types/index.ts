@@ -4,6 +4,7 @@
 export type Currency =
   | "USD" | "EUR" | "GBP" | "INR" | "SGD" | "AED"
   | "CHF" | "JPY" | "CAD" | "AUD" | "SEK" | "NOK"
+  | "CNH" | "CNY" | "HKD" | "NZD" | "DKK" | "PLN" | "NPR"
   | "MYR" | "THB" | "IDR" | "PHP" | "KES" | "NGN"
   | "EGP" | "SAR" | "QAR" | "KWD";
 

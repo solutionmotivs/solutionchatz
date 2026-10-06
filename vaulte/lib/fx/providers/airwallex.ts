@@ -1,3 +1,4 @@
+import { majorString } from "@/lib/currency";
 // Airwallex as an FX + payout provider. Prices come from their quotes API (a firm, lockable rate), never from a table.
 import { airwallexFromEnv, type AirwallexClient } from "@/lib/psp/airwallex/client";
 import { localRailFor, railEta } from "@/lib/routing/rails";
@@ -15,7 +16,7 @@ export class AirwallexFxProvider implements FxProvider {
   supports(src: string, dst: string) { return src !== dst && SUPPORTED.has(src) && SUPPORTED.has(dst); }
 
   async quote(req: FxQuoteRequest, _mid?: { destPerSource: number; usdPerSource: number }): Promise<FxQuote> {
-    const sellAmount = (req.sourceAmountMinor / 100).toFixed(2);
+    const sellAmount = majorString(req.sourceAmountMinor, req.sourceCurrency);
     const q = await this.client.createFxQuote({ sellCurrency: req.sourceCurrency, buyCurrency: req.destCurrency, sellAmount, validity: "MIN_15" });
     // Prefer the indicative amounts (buy/sell) over interpreting the pair orientation of client_rate.
     const buy = num(q.buy_amount), sell = num(q.sell_amount);

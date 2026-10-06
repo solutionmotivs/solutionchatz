@@ -1,3 +1,4 @@
+import { majorString } from "@/lib/currency";
 // Wise as a payout partner. CUSTODY: funding a transfer "from balance" spends money held at Wise. Use a customer-owned
 // profile (WISE_PROFILE_ID) or a segregated partner arrangement; never pool customer money in one Vaulte-owned balance.
 import { createHash, createPublicKey, createVerify } from "crypto";
@@ -26,7 +27,7 @@ export class WisePartner implements StablecoinPartner {
     const leg = req.route.legs[req.route.legs.length - 1];
     const src = leg.srcCurrency ?? req.destCurrency;
     // Fix the target amount so the recipient gets exactly the quoted amount; the rate drift is absorbed by Vaulte's margin.
-    const q = await this.client.createQuote({ sourceCurrency: src, targetCurrency: req.destCurrency, targetAmount: Number((Number(req.destAmountMinor) / 100).toFixed(2)) });
+    const q = await this.client.createQuote({ sourceCurrency: src, targetCurrency: req.destCurrency, targetAmount: Number(majorString(req.destAmountMinor, req.destCurrency)) });
     const rec = wiseRecipient(req.beneficiary);
     const acct = await this.client.createRecipient({ currency: req.destCurrency, type: rec.type, accountHolderName: req.beneficiary.accountName, legalType: req.beneficiary.entityType === "COMPANY" ? "BUSINESS" : "PRIVATE", details: rec.details });
     // customerTransactionId must be a UUID; derive deterministically-looking but stable: a retried call with the same id is a no-op at Wise.

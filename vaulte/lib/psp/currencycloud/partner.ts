@@ -1,3 +1,4 @@
+import { majorString } from "@/lib/currency";
 // Currencycloud as a payout/funding partner. CUSTODY: payments are made from balances at Currencycloud. Fund them only through
 // sub-accounts / on-behalf-of contacts held in the customer's own name (CURRENCYCLOUD_ON_BEHALF_OF), never from one pooled Vaulte account.
 import { timingSafeEqual } from "crypto";
@@ -32,7 +33,7 @@ export class CurrencycloudPartner implements StablecoinPartner {
   async createPayout(req: PayoutRequest): Promise<PayoutResult> {
     if (!req.beneficiary) throw new Error("RECIPIENT_BANK_DETAILS_MISSING: add the recipient's bank account before paying out via Currencycloud");
     const leg = req.route.legs[req.route.legs.length - 1];
-    const dest = (Number(req.destAmountMinor) / 100).toFixed(2);
+    const dest = majorString(req.destAmountMinor, req.destCurrency);
     const ben = await this.client.createBeneficiary({ ...ccBeneficiary(req.beneficiary) });
     // The rate is not lockable: we fix the BUY side so the recipient gets exactly the quoted amount; any rate drift is Vaulte's margin.
     let conversionId: string | undefined;

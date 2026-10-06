@@ -1,3 +1,4 @@
+import { majorString } from "@/lib/currency";
 import { wiseFromEnv, type WiseClient } from "@/lib/psp/wise/client";
 import { localRailFor, railEta } from "@/lib/routing/rails";
 import type { FxProvider, FxQuote, FxQuoteRequest } from "./types";
@@ -9,7 +10,7 @@ export class WiseFxProvider implements FxProvider {
   constructor(private client: WiseClient) {}
   supports(s: string, d: string) { return s !== d && SUPPORTED.has(s) && SUPPORTED.has(d); }
   async quote(req: FxQuoteRequest, _mid?: unknown): Promise<FxQuote> {
-    const q = await this.client.createQuote({ sourceCurrency: req.sourceCurrency, targetCurrency: req.destCurrency, sourceAmount: Number((req.sourceAmountMinor / 100).toFixed(2)) });
+    const q = await this.client.createQuote({ sourceCurrency: req.sourceCurrency, targetCurrency: req.destCurrency, sourceAmount: Number(majorString(req.sourceAmountMinor, req.sourceCurrency)) });
     const opts = (q.paymentOptions ?? []).filter(o => !o.disabled && o.payIn === "BALANCE");
     const o = opts.sort((a, b) => (b.targetAmount ?? 0) - (a.targetAmount ?? 0))[0];
     // Rate net of Wise's fee, so the comparison with other providers is on what the recipient actually receives.

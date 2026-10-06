@@ -1,5 +1,6 @@
 // Pricing: Vaulte's markup on top of firm partner costs, with a floor so a quote can never lose money.
 import type { CostBreakdown, RateTable, Route, TransferKindT } from "@/lib/stablecoin/types";
+import { minorToMajor } from "@/lib/currency";
 import { routeCostUsd } from "@/lib/routing/engine";
 
 export interface MarkupTier {
@@ -56,7 +57,7 @@ const score = (o: CorridorMarkup) => (o.from && o.from !== "*" ? 2 : 0) + (o.to 
 export function toUsd(minor: number, currency: string, rates: RateTable): number {
   const rate = rates[currency];
   if (!rate) throw new Error(`No FX rate for ${currency}`);
-  return minor / 100 / rate;
+  return minorToMajor(minor, currency) / rate;
 }
 
 export function fromUsd(usd: number, currency: string, rates: RateTable): number {

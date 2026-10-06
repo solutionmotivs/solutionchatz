@@ -1,3 +1,4 @@
+import { fmtMinor } from "@/lib/currency";
 // app/pay/[token]/page.tsx
 // Public payment page — no login required for recipient
 // This is the viral loop landing page
@@ -13,9 +14,7 @@ export async function generateMetadata({ params }: { params: { token: string } }
 
   if (!invoice) return { title: "Invoice Not Found" };
 
-  const amount = new Intl.NumberFormat("en-US", {
-    style: "currency", currency: invoice.currency,
-  }).format(Number(invoice.totalAmount) / 100);
+  const amount = fmtMinor(invoice.totalAmount, invoice.currency);
 
   return {
     title: `${invoice.kind === "PROFORMA" ? "Proforma" : "Invoice"} ${invoice.number} — ${amount} from ${invoice.organization.name}`,

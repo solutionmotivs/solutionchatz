@@ -94,29 +94,46 @@ const PRIMARY_LEGS: Leg[] = [
   // ── India: inbound payout (business: PA-CB export partner, personal: MTSS partner) ──
   {
     id: "in.payout.pacb", partner: "mock_in_pacb", kind: "INDIA_PAYOUT", country: "IN", jurisdiction: "IN",
-    destCurrency: "INR", acceptsFiat: ["USD", "AED", "EUR", "GBP", "SGD"], rails: ["IMPS", "RTGS"], tokens: [], chains: [],
+    destCurrency: "INR", acceptsFiat: ["USD", "AED", "EUR", "GBP", "SGD", "CAD", "AUD", "JPY", "HKD", "CNH"], rails: ["IMPS", "RTGS"], tokens: [], chains: [],
     spreadBps: 12, feeBps: 10, fixedFeeUsd: 0.5, etaSec: 4 * 3600, minUsd: 10, maxUsd: 29_000,
     kinds: ["BUSINESS"], indiaAuth: "PA_CB_E",
   },
   {
     id: "in.payout.mtss", partner: "mock_in_mtss", kind: "INDIA_PAYOUT", country: "IN", jurisdiction: "IN",
-    destCurrency: "INR", acceptsFiat: ["USD", "AED", "EUR", "GBP", "SGD"], rails: ["IMPS", "UPI"], tokens: [], chains: [],
+    destCurrency: "INR", acceptsFiat: ["USD", "AED", "EUR", "GBP", "SGD", "CAD", "AUD", "JPY", "HKD", "CNH"], rails: ["IMPS", "UPI"], tokens: [], chains: [],
     spreadBps: 15, feeBps: 15, fixedFeeUsd: 0.5, etaSec: 15 * 60, minUsd: 5, maxUsd: 2_500,
     kinds: ["PERSONAL"], indiaAuth: "MTSS",
   },
   // ── India: outward, fiat only (no stablecoin on the Indian side) ─────────────
   {
     id: "in.outward.business", partner: "mock_in_out", kind: "DIRECT", country: "IN", jurisdiction: "IN",
-    srcCurrency: "INR", destCurrencies: ["USD", "EUR", "GBP", "AED", "SGD"], rails: ["SWIFT_SAMEDAY"], tokens: [], chains: [],
+    srcCurrency: "INR", destCurrencies: ["USD", "EUR", "GBP", "AED", "SGD", "CAD", "AUD", "JPY", "HKD", "CNH"], rails: ["SWIFT_SAMEDAY"], tokens: [], chains: [],
     spreadBps: 20, feeBps: 15, fixedFeeUsd: 2, etaSec: 8 * 3600, minUsd: 10, maxUsd: 29_000,
     kinds: ["BUSINESS"], indiaAuth: "PA_CB_I",
   },
   {
     id: "in.outward.personal", partner: "mock_in_out", kind: "DIRECT", country: "IN", jurisdiction: "IN",
-    srcCurrency: "INR", destCurrencies: ["USD", "EUR", "GBP", "AED", "SGD"], rails: ["SWIFT_SAMEDAY"], tokens: [], chains: [],
+    srcCurrency: "INR", destCurrencies: ["USD", "EUR", "GBP", "AED", "SGD", "CAD", "AUD", "JPY", "HKD", "CNH"], rails: ["SWIFT_SAMEDAY"], tokens: [], chains: [],
     spreadBps: 25, feeBps: 20, fixedFeeUsd: 2, etaSec: 12 * 3600, minUsd: 10, maxUsd: 250_000,
     kinds: ["PERSONAL"], indiaAuth: "LRS_AD",
   },
+];
+
+
+// ── Canada, Australia, Japan, Hong Kong (offshore yuan): mock partners so every pair quotes in test mode ─────────────────
+const regional = (id: string, partner: string, country: string, jurisdiction: string, ccy: string, rails: string[], tokens: Array<"USDC" | "USDT">, eta: { on: number; off: number }): Leg[] => [
+  { id: `${id}.accept`, partner, kind: "ACCEPT_TOKEN", country, jurisdiction, rails: ["ONCHAIN"], tokens, chains: [...ALL_CHAINS], spreadBps: 0, feeBps: 4, fixedFeeUsd: 0, etaSec: 60, minUsd: 10, maxUsd: 1_000_000, kinds: ["BUSINESS", "PERSONAL"] },
+  { id: `${id}.onramp.${ccy.toLowerCase()}`, partner, kind: "ONRAMP_FIAT", country, jurisdiction, srcCurrency: ccy, rails, tokens, chains: [...ALL_CHAINS], spreadBps: 6, feeBps: 7, fixedFeeUsd: 0, etaSec: eta.on, minUsd: 10, maxUsd: 1_000_000, kinds: ["BUSINESS", "PERSONAL"] },
+  { id: `${id}.offramp.${ccy.toLowerCase()}`, partner, kind: "OFFRAMP", country, jurisdiction, destCurrency: ccy, rails, tokens, chains: [...ALL_CHAINS], spreadBps: 6, feeBps: 7, fixedFeeUsd: 0, etaSec: eta.off, minUsd: 10, maxUsd: 1_000_000, kinds: ["BUSINESS", "PERSONAL"] },
+];
+const REGIONAL_LEGS: Leg[] = [
+  ...regional("ca", "mock_ca", "CA", "CA", "CAD", ["INTERAC", "EFT_CA"], ["USDC"], { on: 120, off: 180 }),
+  ...regional("au", "mock_au", "AU", "AU", "AUD", ["NPP"], ["USDC", "USDT"], { on: 60, off: 90 }),
+  ...regional("jp", "mock_jp", "JP", "JP", "JPY", ["ZENGIN"], ["USDC"], { on: 300, off: 300 }),
+  ...regional("hk", "mock_hk", "HK", "HK", "HKD", ["FPS_HK"], ["USDC", "USDT"], { on: 60, off: 90 }),
+  // Offshore yuan through the Hong Kong partner. Slower (clearing windows) and limited to smaller tickets.
+  { id: "hk.offramp.cnh", partner: "mock_hk", kind: "OFFRAMP", country: "HK", jurisdiction: "HK", destCurrency: "CNH", rails: ["CIPS"], tokens: ["USDC", "USDT"], chains: [...ALL_CHAINS], spreadBps: 12, feeBps: 10, fixedFeeUsd: 1, etaSec: 4 * 3600, minUsd: 50, maxUsd: 250_000, kinds: ["BUSINESS"] },
+  { id: "hk.onramp.cnh", partner: "mock_hk", kind: "ONRAMP_FIAT", country: "HK", jurisdiction: "HK", srcCurrency: "CNH", rails: ["CIPS"], tokens: ["USDC", "USDT"], chains: [...ALL_CHAINS], spreadBps: 12, feeBps: 10, fixedFeeUsd: 1, etaSec: 4 * 3600, minUsd: 50, maxUsd: 250_000, kinds: ["BUSINESS"] },
 ];
 
 /** Approximate time for chain confirmation + partner detection, added once per stablecoin route. */
@@ -140,14 +157,20 @@ export const CHAIN_FEE_USD: Record<string, number> = {
 /** Token rules per jurisdiction. MiCA: USDT is not authorised for EU-licensed providers (since 1 Jul 2026). */
 export const JURISDICTION_TOKEN_RULES: Record<string, { allowed: Array<"USDC" | "USDT"> }> = {
   EU: { allowed: ["USDC"] },
+  // Stablecoin availability differs by market (platform rules, regulator guidance). Verify each with counsel before opening live.
+  CA: { allowed: ["USDC"] },
+  JP: { allowed: ["USDC"] },
+  // Mainland China prohibits crypto-asset business: no stablecoin leg may sit in CN. Onshore yuan is fiat only.
+  CN: { allowed: [] },
 };
 
 /** Every key partner gets a slightly pricier backup so routing can fail over (real life: sign 2+ partners per corridor). */
-const BACKED_UP = ["mock_eu", "mock_uk", "mock_us", "mock_uae", "mock_sg", "mock_in_pacb", "mock_in_mtss"];
+const BACKED_UP = ["mock_eu", "mock_uk", "mock_us", "mock_uae", "mock_sg", "mock_ca", "mock_au", "mock_jp", "mock_hk", "mock_in_pacb", "mock_in_mtss"];
 
 export const MOCK_LEGS: Leg[] = [
   ...PRIMARY_LEGS,
-  ...PRIMARY_LEGS.filter(l => BACKED_UP.includes(l.partner)).map(l => ({
+  ...REGIONAL_LEGS,
+  ...[...PRIMARY_LEGS, ...REGIONAL_LEGS].filter(l => BACKED_UP.includes(l.partner)).map(l => ({
     ...l,
     id: `${l.id}.b`,
     partner: `${l.partner}_b`,
