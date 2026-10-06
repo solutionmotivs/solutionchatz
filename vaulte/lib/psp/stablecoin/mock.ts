@@ -1,7 +1,7 @@
 // Sandbox partner: deterministic, no network, no real money. Used for demos, tests and the e2e flow.
 import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 import type {
-  DepositInstruction, FiatFundingInstruction, PayoutRequest, PayoutResult, StablecoinPartner,
+  DepositInstruction, FiatFundingInstruction, PartnerDocument, PayoutRequest, PayoutResult, StablecoinPartner,
   VirtualAccountRequest, VirtualAccountResult,
 } from "./partner";
 
@@ -53,6 +53,13 @@ export class MockPartner implements StablecoinPartner {
     else if (req.currency === "AUD") { details.bsb = "000-000"; details.account_number = String(Math.floor(Math.random() * 1e9)).padStart(9, "0"); }
     else details.account_number = `MOCK${rid(6).toUpperCase()}`;
     return { partnerRef: `mock_va_${rid(6)}`, details };
+  }
+
+  /** Sandbox stand-in for a partner that delivers certificates after the payout: an eBRC for goods exports once MOCK_EBRC_DELAY_SEC has passed (default 0). */
+  async listDocuments(q: { transferId: string; destCountry: string; purposeCode: string | null; completedAt: Date | null }): Promise<PartnerDocument[]> {
+    if (q.destCountry !== "IN" || !q.completedAt || !/^P01\d\d$/.test(q.purposeCode ?? "")) return [];
+    if (Date.now() - q.completedAt.getTime() < Number(process.env.MOCK_EBRC_DELAY_SEC ?? 0) * 1000) return [];
+    return [{ type: "EBRC", number: `MOCK-EBRC-${q.transferId.slice(-8).toUpperCase()}`, issuedOn: new Date().toISOString().slice(0, 10), refs: { source: "mock partner poll" } }];
   }
 
   verifyWebhook(rawBody: string, headers: Headers): boolean {

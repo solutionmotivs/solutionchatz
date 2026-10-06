@@ -15,5 +15,5 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const docs = await db.document.findMany({ where: { transferId: t.id, organizationId: c.orgId }, orderBy: { createdAt: "asc" } });
   const checklist = checklistFor(t, docs);
   const requestable = t.status === "COMPLETED" ? REQUESTABLE.filter(r => (t.destCountry === "IN" || r === "BANK_CERT") && !docs.some(d => d.type === r && d.status !== "REJECTED")) : [];
-  return apiSuccess({ data: docs.map(presentDocument), checklist, requestable, complete: checklist.filter(i => i.required).every(i => i.status !== "PENDING"), retention_note: "Keep these records for at least the period your regulator and tax law require (commonly 5-8 years); confirm with your advisers." });
+  return apiSuccess({ data: docs.map(presentDocument), checklist, auto_update: { last_checked_at: t.certCheckedAt?.toISOString() ?? null, note: t.certCheckNote, how: "We ask the payout partner for certificates on a schedule and file anything that arrives by email from your bank or partner. Nothing here is issued by Vaulte." }, requestable, complete: checklist.filter(i => i.required).every(i => i.status !== "PENDING"), retention_note: "Keep these records for at least the period your regulator and tax law require (commonly 5-8 years); confirm with your advisers." });
 }

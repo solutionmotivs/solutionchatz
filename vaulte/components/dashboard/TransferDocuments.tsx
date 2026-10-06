@@ -56,6 +56,7 @@ export default function TransferDocuments({ id, canEdit }: { id: string; canEdit
                 {c.detail && <span className="text-mist w-full">{c.detail}</span>}
               </div>))}
           </Section>
+          {data.auto_update && <p className="text-[11px] text-mist leading-relaxed max-w-3xl mb-4">Automatic update: {data.auto_update.last_checked_at ? `last checked ${new Date(data.auto_update.last_checked_at).toLocaleString()} (${data.auto_update.note ?? "partner"})` : "not checked yet"}. {data.auto_update.how}</p>}
           <Section title="Certificate requests" hint="Certificates are issued by your bank, the licensed partner or DGFT. We ask them for you and attach the document here when it arrives.">
             {reqs.length === 0 ? <p className="text-[12px] text-mist">No requests yet.</p> : reqs.map(r => (
               <div key={r.id} className="flex flex-wrap items-center gap-3 border-t border-ink/10 first:border-0 py-2 text-[12px]">

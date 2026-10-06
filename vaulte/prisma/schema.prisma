@@ -626,6 +626,9 @@ model Transfer {
   completedAt    DateTime?
   /// When the partner confirmed the sender's money (start of the settlement clock we measure)
   fundedAt       DateTime?
+  /// When we last looked for this transfer's certificates (eFIRA/eBRC) at the partner, and which sources answered
+  certCheckedAt  DateTime?
+  certCheckNote  String?
 
   organizationId    String
   organization      Organization @relation(fields: [organizationId], references: [id])
@@ -1075,7 +1078,7 @@ model Document {
   issuedOn DateTime?
   /// Cross-references: EDPMS/IRM numbers, shipping bill, DGFT reference...
   refs     Json      @default("{}")
-  /// UPLOAD | PARTNER | GENERATED
+  /// UPLOAD | PARTNER | GENERATED | EMAIL | RECONCILIATION | POLL
   source   String
   /// RECEIVED (awaiting staff check) | VERIFIED | REJECTED
   status   String    @default("RECEIVED")
@@ -1262,4 +1265,24 @@ model EscrowEvent {
   note        String?
 
   @@index([dealId, createdAt])
+}
+
+/// Certificates and bank messages that arrived by email from an allow-listed sender (banks, DGFT, partners). Dedupes by Message-ID
+/// and gives staff a queue for the ones that could not be matched to a transfer.
+model InboundMessage {
+  id         String   @id @default(cuid())
+  receivedAt DateTime @default(now())
+  messageId  String   @unique
+  fromAddr   String
+  subject    String
+  /// MATCHED | UNMATCHED | AMBIGUOUS | REJECTED
+  status     String
+  note       String?
+  transferId String?
+  documentIds Json    @default("[]")
+  /// Staff who resolved an UNMATCHED/AMBIGUOUS message
+  resolvedById String?
+  resolvedAt   DateTime?
+
+  @@index([status])
 }

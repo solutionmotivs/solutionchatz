@@ -8,6 +8,7 @@ export const DOC_TYPES = {
   EBRC: { label: "eBRC (electronic bank realisation certificate)", issuer: "Bank, via DGFT portal" },
   BRC: { label: "BRC (bank realisation certificate)", issuer: "Authorised dealer bank" },
   BANK_CERT: { label: "Bank certificate / confirmation", issuer: "Bank" },
+  IRM: { label: "IRM (inward remittance message, EDPMS)", issuer: "Authorised dealer bank, via RBI EDPMS" },
   INVOICE_COPY: { label: "Invoice copy", issuer: "Exporter / supplier" },
   SHIPPING_BILL: { label: "Shipping bill (goods exports)", issuer: "Customs" },
   PURPOSE_PROOF: { label: "Supporting document for the purpose code", issuer: "Customer" },
@@ -18,7 +19,7 @@ export type DocType = keyof typeof DOC_TYPES;
 export const isDocType = (t: string): t is DocType => t in DOC_TYPES;
 
 /** Types a customer may upload (certificates the bank/partner issues can also be uploaded when they send them by email). */
-export const UPLOADABLE: DocType[] = ["EFIRA", "FIRC", "EBRC", "BRC", "BANK_CERT", "INVOICE_COPY", "SHIPPING_BILL", "PURPOSE_PROOF", "OTHER"];
+export const UPLOADABLE: DocType[] = ["EFIRA", "FIRC", "EBRC", "BRC", "BANK_CERT", "IRM", "INVOICE_COPY", "SHIPPING_BILL", "PURPOSE_PROOF", "OTHER"];
 
 export interface ChecklistItem {
   type: DocType | "PURPOSE_CODE";

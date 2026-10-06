@@ -59,12 +59,17 @@ export interface VirtualAccountResult {
   details: Record<string, string>;
 }
 
+/** A certificate or confirmation a partner makes available for a transfer it executed. */
+export interface PartnerDocument { type: "EFIRA" | "FIRC" | "EBRC" | "BRC" | "BANK_CERT" | "IRM"; number: string; issuedOn?: string; refs?: Record<string, string>; file?: { data: Buffer; name: string } }
+
 export interface StablecoinPartner {
   readonly id: string;
   createDeposit(opts: { transferId: string; token: Token; chain: Chain; expectedAmountMicro: bigint }): Promise<DepositInstruction>;
   createFiatFunding(opts: { transferId: string; currency: string; amountMinor: bigint }): Promise<FiatFundingInstruction>;
   createPayout(req: PayoutRequest): Promise<PayoutResult>;
   createVirtualAccount(req: VirtualAccountRequest): Promise<VirtualAccountResult>;
+  /** Optional: certificates/confirmations the partner holds for a payout it made. Polled by the certificate job; nothing is trusted as verified unless the partner is. */
+  listDocuments?(q: { partnerRef: string | null; transferId: string; destCountry: string; purposeCode: string | null; completedAt: Date | null }): Promise<PartnerDocument[]>;
   verifyWebhook(rawBody: string, headers: Headers, url?: URL): boolean;
   /** Convert the partner's own webhook payload into Vaulte's event shape ({id, type, data}); null = not relevant. */
   normalizeWebhook?(payload: unknown): { id: string; type: string; data: Record<string, unknown> } | null;

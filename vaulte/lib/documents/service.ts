@@ -16,7 +16,7 @@ export interface AddDocInput {
   issuer?: string | null;
   issuedOn?: string | null;
   refs?: Record<string, string>;
-  source: "UPLOAD" | "PARTNER" | "GENERATED";
+  source: "UPLOAD" | "PARTNER" | "GENERATED" | "EMAIL" | "RECONCILIATION" | "POLL";
   file?: { data: Buffer; name: string };
   uploadedById?: string | null;
   /** Partner-delivered certificates are trusted as received; customer uploads wait for a staff check. */

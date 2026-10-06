@@ -62,6 +62,7 @@ async function register(name, country) {
   const v = await api("/api/auth/verify-email", { method: "POST", jar, body: { email, code: r.json.dev_code } });
   return { key: v.json.test_api_key, orgId: v.json.organization.id, email, jar, userId: v.json.user.id };
 }
+async function mkPdfBuf(label) { const d = await PDFDocument.create(); d.addPage([300, 200]).drawText(label); return Buffer.from(await d.save()); }
 async function entity(key, legalName, country, currency, entityType = "BUSINESS") {
   const r = await api("/api/entities", { method: "POST", key, body: { legalName, country, currency, isSandbox: true } });
   const id = r.json.id;
@@ -1368,6 +1369,49 @@ async function main() {
   check("a token must match the currency it is priced in (USDC in EUR, EURC in USD are refused)", wrong1.status === 400 && wrong1.json.error.code === "INVALID_FUNDING" && wrong2.status === 400 && wrong2.json.error.code === "INVALID_FUNDING", JSON.stringify([wrong1.json?.error, wrong2.json?.error]));
   const usdtEu = await quoteFor(euSender, euRecv, "EUR", "EUR", 100000, "STABLECOIN", "USDT");
   check("USDT is refused for euros anyway (and not offered on EU legs)", usdtEu.status === 400);
+
+  console.log("== Certificate auto-update: partner poll, inbound email, EDPMS import");
+  const cronPost = (path, headers = {}) => fetch(`${BASE}${path}`, { method: "POST", headers: { "x-cron-secret": process.env.CRON_SECRET, ...headers } });
+  const gq = await api("/api/quotes", { method: "POST", key: A.key, body: { kind: "BUSINESS", sender_entity_id: payer, recipient_entity_id: exporter, source_currency: "USD", dest_currency: "INR", source_amount: 500000, funding_method: "STABLECOIN", token: "USDC", prefer: "cheapest" } });
+  const gInv = await api("/api/invoices", { method: "POST", key: A.key, body: { number: `INV-${uniq}-GOODS`, currency: "USD", purpose_code: "P0103", line_items: [{ description: "Garments", quantity: 1, unit_price: 500000 }] } });
+  const gt = await api("/api/stablecoin/payins", { method: "POST", key: A.key, body: { quote_id: gq.json.id, invoice_id: gInv.json.id, purpose_code: "P0103" } });
+  await sim(A.key, { event: "deposit.confirmed", transfer_id: gt.json.id }); await sim(A.key, { event: "payout.completed", transfer_id: gt.json.id });
+  const gDone = await api(`/api/stablecoin/payins/${gt.json.id}`, { key: A.key });
+  check("a goods-export transfer to India completes and still lacks its eBRC", gDone.json?.status === "COMPLETED" && (await api(`/api/transfers/${gt.json.id}/documents`, { key: A.key })).json.checklist.some(c => c.type === "EBRC" && c.status === "PENDING"), JSON.stringify(gDone.json?.status));
+  const gReq = await api(`/api/transfers/${gt.json.id}/document-requests`, { method: "POST", key: A.key, body: { type: "EBRC" } });
+  check("the customer asks for the eBRC", gReq.status === 201, JSON.stringify(gReq.json));
+  check("the poll needs the cron secret", (await fetch(`${BASE}/api/internal/documents/poll`, { method: "POST" })).status === 401);
+  const poll1 = await (await cronPost("/api/internal/documents/poll")).json();
+  const gDocs = await api(`/api/transfers/${gt.json.id}/documents`, { key: A.key });
+  const polled = gDocs.json.data.find(d => d.type === "EBRC");
+  check("the poll asks the payout partner and files the eBRC it holds (source POLL, verified), checked and added counted", poll1.added >= 1 && poll1.checked >= 1 && polled?.source === "POLL" && polled.status === "VERIFIED" && /^MOCK-EBRC-/.test(polled.number), JSON.stringify([poll1, polled]));
+  check("the open certificate request closes by itself", (await api(`/api/transfers/${gt.json.id}/document-requests`, { key: A.key })).json.data.find(r => r.type === "EBRC")?.status === "FULFILLED");
+  check("the transfer shows when it was last checked and the outcome", !!gDocs.json.auto_update.last_checked_at && /mock_in_pacb/.test(gDocs.json.auto_update.note ?? ""), JSON.stringify(gDocs.json.auto_update));
+  const poll2 = await (await cronPost("/api/internal/documents/poll")).json();
+  check("a second poll does not duplicate (nothing missing, recently checked)", poll2.added === 0 && (await db.document.count({ where: { transferId: gt.json.id, type: "EBRC" } })) === 1, JSON.stringify(poll2));
+
+  const signed = body => { const raw = JSON.stringify(body); return { raw, sig: "sha256=" + createHmac("sha256", process.env.INBOUND_EMAIL_SECRET).update(raw).digest("hex") }; };
+  const inbound = async (body, sig) => { const { raw, sig: good } = signed(body); const r = await fetch(`${BASE}/api/webhooks/inbound-email`, { method: "POST", headers: { "x-inbound-signature": sig ?? good, "content-type": "application/json" }, body: raw }); return { status: r.status, json: await r.json().catch(() => null) }; };
+  const pdfB64 = (await mkPdfBuf("Bank certificate " + uniq)).toString("base64");
+  const mailBase = { message_id: `<m1-${uniq}@bank.example>`, from: "Bank Alerts <alerts@bank.example>", subject: `eBRC No. 2026ABC/998877 for ${gt.json.id}`, text: "Please find the eBRC attached.", attachments: [{ filename: "ebrc.pdf", content_type: "application/pdf", content_base64: pdfB64 }, { filename: "fake.pdf", content_type: "application/pdf", content_base64: Buffer.from("<script>alert(1)</script>").toString("base64") }] };
+  check("an unsigned or wrongly signed message is refused", (await inbound(mailBase, "sha256=00")).status === 401 && (await fetch(`${BASE}/api/webhooks/inbound-email`, { method: "POST", body: "{}" })).status === 401);
+  const mailA = await inbound(mailBase);
+  const emailDoc = mailA.json?.document_ids?.[0] ? await db.document.findUnique({ where: { id: mailA.json.document_ids[0] } }) : null;
+  check("an emailed eBRC from an allow-listed bank is matched by the transfer id in its subject, filed as RECEIVED (awaiting staff check, never auto-verified), and the HTML 'pdf' is dropped", mailA.status === 200 && mailA.json.status === "MATCHED" && mailA.json.transfer_id === gt.json.id && mailA.json.document_ids.length === 1 && emailDoc?.type === "EBRC" && emailDoc.source === "EMAIL" && emailDoc.status === "RECEIVED" && emailDoc.number === "2026ABC/998877", JSON.stringify(mailA.json));
+  check("the same message again is a duplicate", (await inbound(mailBase)).json?.status === "DUPLICATE");
+  const mailC = await inbound({ ...mailBase, message_id: `<m3-${uniq}@evil.example>`, from: "attacker@evil.example" });
+  check("a sender that is not on the allow-list is rejected", mailC.json?.status === "REJECTED");
+  const mailD = await inbound({ message_id: `<m4-${uniq}@bank.example>`, from: "alerts@bank.example", subject: "Your certificate", text: "No reference here", attachments: [{ filename: "c.pdf", content_base64: pdfB64 }] });
+  check("a message with no transfer reference is queued for staff, not guessed", mailD.json?.status === "UNMATCHED");
+  const inboundQ = await api("/api/admin/documents/inbound?status=UNMATCHED", { jar: staffJar });
+  check("staff see the unmatched message; customers cannot", inboundQ.status === 200 && inboundQ.json.data.some(m => m.subject === "Your certificate") && [401, 403].includes((await api("/api/admin/documents/inbound", { jar: A.jar })).status), JSON.stringify(inboundQ.json).slice(0, 200));
+
+  const tIn2 = await db.transfer.findFirst({ where: { organizationId: A.orgId, status: "COMPLETED", destCountry: "IN", kind: "BUSINESS", efiraRef: { not: null }, id: { not: gt.json.id } }, orderBy: { createdAt: "asc" } });
+  const csv = `IRM Number,Reference,Amount,Currency,Date,Remitter\nIRM-${uniq}-1,${tIn2.id},5000.00,USD,${new Date().toISOString().slice(0, 10)},Acme\nIRM-${uniq}-2,UNKNOWN-REF,1.00,USD,2020-01-01,Nobody\nIRM-${uniq}-3,,5000.00,USD,${new Date().toISOString().slice(0, 10)},Acme again\n`;
+  const recon = await api("/api/admin/documents/reconcile", { method: "POST", jar: staffJar, body: { csv } });
+  const irmDoc = await db.document.findFirst({ where: { transferId: tIn2.id, type: "IRM" } });
+  check("an EDPMS/IRM CSV import attaches the IRM to the transfer named by reference (staff-imported, verified) and reports rows it will not guess", recon.status === 200 && recon.json.matched === 1 && irmDoc?.number === `IRM-${uniq}-1` && irmDoc.source === "RECONCILIATION" && irmDoc.status === "VERIFIED" && recon.json.unmatched.length === 2, JSON.stringify(recon.json));
+  check("only staff can import", [401, 403].includes((await api("/api/admin/documents/reconcile", { method: "POST", jar: A.jar, body: { csv } })).status));
 
   console.log("== Partner webhook endpoint");
   const body = JSON.stringify({ id: `evt_${uniq}`, type: "deposit.detected", data: { address: "nope" } });
