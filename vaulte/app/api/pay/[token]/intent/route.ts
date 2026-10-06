@@ -8,6 +8,7 @@ import { clientIp, rateLimit } from "@/lib/security/ratelimit";
 import { readJson, handleServiceError } from "@/lib/api-helpers";
 import { createQuoteForDestination, createTransferFromQuote, ServiceError } from "@/lib/stablecoin/service";
 import { publicPayView } from "@/lib/stablecoin/public-view";
+import { TOKEN_PEG, type Token } from "@/lib/stablecoin/types";
 
 const Schema = z.object({
   payer_name: z.string().min(2).max(200),
@@ -15,9 +16,9 @@ const Schema = z.object({
   payer_email: z.string().email(),
   /** Stablecoin (default) or a bank transfer in the payer's own currency, routed through a licensed partner. */
   method: z.enum(["STABLECOIN", "BANK_TRANSFER"]).default("STABLECOIN"),
-  token: z.enum(["USDC", "USDT"]).optional(),
+  token: z.enum(["USDC", "USDT", "EURC"]).optional(),
   source_currency: z.string().length(3).toUpperCase().optional(),
-}).refine(v => v.method === "BANK_TRANSFER" || !!v.token, { message: "Choose USDC or USDT", path: ["token"] });
+}).refine(v => v.method === "BANK_TRANSFER" || !!v.token, { message: "Choose USDC, USDT or EURC", path: ["token"] });
 
 const OPEN = ["PENDING_VERIFICATION", "AWAITING_FUNDS", "FUNDS_DETECTED", "PAYING_OUT", "QUARANTINED"] as const;
 
@@ -51,14 +52,14 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   try {
     const payer = await db.entity.create({
       data: {
-        legalName: d.payer_name, country: d.payer_country, currency: bank ? (d.source_currency ?? "USD") : "USD", entityType: "BUSINESS",
+        legalName: d.payer_name, country: d.payer_country, currency: bank ? (d.source_currency ?? "USD") : TOKEN_PEG[d.token as Token], entityType: "BUSINESS",
         verificationStatus: "NOT_STARTED", verificationRef: `guest:${invoice.id}`,
         isSandbox: invoice.organization.kybStatus !== "APPROVED", organizationId: invoice.organizationId,
       },
     });
     const { row } = await createQuoteForDestination(invoice.organizationId, {
       kind: "BUSINESS", senderEntityId: payer.id, recipientEntityId: invoice.issuerEntityId,
-      sourceCurrency: bank ? (d.source_currency ?? "USD") : "USD", destCurrency: invoice.currency, destAmount: Number(invoice.totalAmount),
+      sourceCurrency: bank ? (d.source_currency ?? "USD") : TOKEN_PEG[d.token as Token], destCurrency: invoice.currency, destAmount: Number(invoice.totalAmount),
       fundingMethod: bank ? "FIAT_LOCAL" : "STABLECOIN", ...(bank ? {} : { token: d.token }), prefer: "balanced",
     });
     const transfer = await createTransferFromQuote(invoice.organizationId, {

@@ -30,4 +30,18 @@ if (which === "currencycloud") {
       ok("quote USD->EUR", q.status === 200 && q.body?.rate > 0, JSON.stringify({ rate: q.body?.rate, options: q.body?.paymentOptions?.length }));
     }
   }
-} else { console.log("usage: node scripts/partner-smoke.mjs currencycloud|wise"); process.exitCode = 2; }
+} else if (which === "circle") {
+  // Circle Mint (USDC/EURC): ping is public; the business-account calls need your sandbox API key. Creates one deposit address (no money moves).
+  const base = process.env.CIRCLE_BASE_URL ?? (process.env.CIRCLE_ENV === "live" ? "https://api.circle.com" : "https://api-sandbox.circle.com");
+  const p = await j(`${base}/ping`);
+  ok("ping", p.status === 200, JSON.stringify(p.body));
+  const noKey = await j(`${base}/v1/businessAccount/balances`);
+  ok("business paths exist and demand a key", noKey.status === 401, `HTTP ${noKey.status}`);
+  if (process.env.CIRCLE_API_KEY) {
+    const h = { authorization: `Bearer ${process.env.CIRCLE_API_KEY}`, "content-type": "application/json" };
+    const b = await j(`${base}/v1/businessAccount/balances`, { headers: h });
+    ok("balances", b.status === 200, `HTTP ${b.status}`);
+    const a = await j(`${base}/v1/businessAccount/wallets/addresses/deposit`, { method: "POST", headers: h, body: JSON.stringify({ idempotencyKey: crypto.randomUUID(), currency: "EUR", chain: "BASE" }) });
+    ok("EURC deposit address on Base", a.status === 200 && !!a.body?.data?.address, `HTTP ${a.status} ${a.body?.message ?? ""}`);
+  } else console.log("SKIP  authenticated checks (set CIRCLE_API_KEY to your sandbox key)");
+} else { console.log("usage: node scripts/partner-smoke.mjs currencycloud|wise|circle"); process.exitCode = 2; }

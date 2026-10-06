@@ -9,17 +9,17 @@ const PRIMARY_LEGS: Leg[] = [
   // ── EU (MiCA): USDC only ─────────────────────────────────────────────────────
   {
     id: "eu.accept", partner: "mock_eu", kind: "ACCEPT_TOKEN", country: "DE", jurisdiction: "EU",
-    rails: ["ONCHAIN"], tokens: ["USDC"], chains: [...FAST_CHAINS, "ethereum"],
+    rails: ["ONCHAIN"], tokens: ["USDC", "EURC"], chains: [...FAST_CHAINS, "ethereum"],
     spreadBps: 0, feeBps: 3, fixedFeeUsd: 0, etaSec: 60, minUsd: 10, maxUsd: 1_000_000, kinds: ["BUSINESS", "PERSONAL"],
   },
   {
     id: "eu.onramp.eur", partner: "mock_eu", kind: "ONRAMP_FIAT", country: "DE", jurisdiction: "EU",
-    srcCurrency: "EUR", rails: ["SEPA_INSTANT"], tokens: ["USDC"], chains: [...FAST_CHAINS, "ethereum"],
+    srcCurrency: "EUR", rails: ["SEPA_INSTANT"], tokens: ["USDC", "EURC"], chains: [...FAST_CHAINS, "ethereum"],
     spreadBps: 4, feeBps: 5, fixedFeeUsd: 0, etaSec: 30, minUsd: 10, maxUsd: 1_000_000, kinds: ["BUSINESS", "PERSONAL"],
   },
   {
     id: "eu.offramp.eur", partner: "mock_eu", kind: "OFFRAMP", country: "DE", jurisdiction: "EU",
-    destCurrency: "EUR", rails: ["SEPA_INSTANT"], tokens: ["USDC"], chains: [...FAST_CHAINS, "ethereum"],
+    destCurrency: "EUR", rails: ["SEPA_INSTANT"], tokens: ["USDC", "EURC"], chains: [...FAST_CHAINS, "ethereum"],
     spreadBps: 4, feeBps: 5, fixedFeeUsd: 0, etaSec: 60, minUsd: 10, maxUsd: 1_000_000, kinds: ["BUSINESS", "PERSONAL"],
   },
   {
@@ -154,9 +154,9 @@ export const CHAIN_FEE_USD: Record<string, number> = {
   ethereum: 2.5,
 };
 
-/** Token rules per jurisdiction. MiCA: USDT is not authorised for EU-licensed providers (since 1 Jul 2026). */
-export const JURISDICTION_TOKEN_RULES: Record<string, { allowed: Array<"USDC" | "USDT"> }> = {
-  EU: { allowed: ["USDC"] },
+/** Token rules per jurisdiction. MiCA: USDT is not authorised for EU-licensed providers (since 1 Jul 2026); USDC and EURC are. */
+export const JURISDICTION_TOKEN_RULES: Record<string, { allowed: Array<"USDC" | "USDT" | "EURC"> }> = {
+  EU: { allowed: ["USDC", "EURC"] },
   // Stablecoin availability differs by market (platform rules, regulator guidance). Verify each with counsel before opening live.
   CA: { allowed: ["USDC"] },
   JP: { allowed: ["USDC"] },

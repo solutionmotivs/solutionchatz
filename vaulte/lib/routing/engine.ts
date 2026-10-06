@@ -1,6 +1,6 @@
 // Route engine: picks the cheapest / fastest combination of partner legs for a transfer.
 // Vaulte owns no rail; a "route" is an ordered set of partner legs with a firm price.
-import type { Chain, Leg, Preference, Route, Token, TransferKindT, FundingMethodT } from "@/lib/stablecoin/types";
+import { TOKENS, TOKEN_PEG, type Chain, type Leg, type Preference, type Route, type Token, type TransferKindT, type FundingMethodT } from "@/lib/stablecoin/types";
 import { effectiveEtaSec, landsSameDay } from "./timing";
 import { CHAIN_ETA_SEC, CHAIN_FEE_USD, JURISDICTION_TOKEN_RULES, MOCK_LEGS } from "./catalog";
 
@@ -111,8 +111,9 @@ export function findRoutes(req: RouteRequest, opts: RouteOptions = {}): Route[] 
     // Direct stablecoin exit in destination currency (not India)
     if (!toIndia) {
       for (const x of offramps.filter(o => o.destCurrency === dst)) {
-        for (const token of ["USDC", "USDT"] as Token[]) {
+        for (const token of TOKENS) {
           if (req.token && req.token !== token) continue;
+          if (req.fundingMethod === "STABLECOIN" && TOKEN_PEG[token] !== src) continue; // the token you send must be priced in the currency you are sending
           for (const chain of chainsFor(f, x, token)) routes.push(buildRoute(dedupe([f, x]), token, chain));
         }
       }
@@ -121,8 +122,9 @@ export function findRoutes(req: RouteRequest, opts: RouteOptions = {}): Route[] 
     // India: stablecoin leg stays offshore, then fiat into an authorised India partner
     for (const x of offramps.filter(o => HUB_CURRENCIES.includes(o.destCurrency ?? ""))) {
       for (const p of indiaPayouts.filter(ip => (ip.acceptsFiat ?? []).includes(x.destCurrency ?? ""))) {
-        for (const token of ["USDC", "USDT"] as Token[]) {
+        for (const token of TOKENS) {
           if (req.token && req.token !== token) continue;
+          if (req.fundingMethod === "STABLECOIN" && TOKEN_PEG[token] !== src) continue;
           for (const chain of chainsFor(f, x, token)) routes.push(buildRoute(dedupe([f, x, p]), token, chain));
         }
       }

@@ -2,6 +2,8 @@
 // Real adapters (Bridge, BVNK, Xflow, OnMeta, ...) plug in here once agreements and keys exist.
 import { currencycloudFromEnv } from "@/lib/psp/currencycloud/client";
 import { CurrencycloudPartner } from "@/lib/psp/currencycloud/partner";
+import { circleFromEnv } from "@/lib/psp/circle/client";
+import { CirclePartner } from "@/lib/psp/circle/partner";
 import { wiseFromEnv } from "@/lib/psp/wise/client";
 import { WisePartner } from "@/lib/psp/wise/partner";
 import type { StablecoinPartner } from "./partner";
@@ -28,6 +30,7 @@ export function getPartner(id: string): StablecoinPartner {
   }
   if (id === "currencycloud") { const c = currencycloudFromEnv(); if (!c) throw new Error("Currencycloud is not configured (CURRENCYCLOUD_LOGIN_ID / CURRENCYCLOUD_API_KEY)"); const p = new CurrencycloudPartner(c); cache.set(id, p); return p; }
   if (id === "wise") { const c = wiseFromEnv(); if (!c) throw new Error("Wise is not configured (WISE_CLIENT_ID / WISE_CLIENT_SECRET)"); const p = new WisePartner(c); cache.set(id, p); return p; }
+  if (id === "circle") { const c = circleFromEnv(); if (!c) throw new Error("Circle is not configured (CIRCLE_API_KEY)"); const p = new CirclePartner(c); cache.set(id, p); return p; }
   throw new Error(`No adapter registered for partner "${id}"`);
 }
 

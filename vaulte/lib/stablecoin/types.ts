@@ -1,7 +1,10 @@
 // Shared types for the stablecoin / cross-border transfer module.
 // Vaulte never holds funds: every leg below is executed and custodied by a licensed partner.
 
-export type Token = "USDC" | "USDT";
+export type Token = "USDC" | "USDT" | "EURC";
+/** The currency one unit of each token is redeemable for (1 token = 1 unit). Stablecoin funding is priced in that currency. */
+export const TOKEN_PEG: Record<Token, string> = { USDC: "USD", USDT: "USD", EURC: "EUR" };
+export const TOKENS: Token[] = ["USDC", "USDT", "EURC"];
 export type Chain = "solana" | "base" | "ethereum" | "tron" | "polygon";
 export type TransferKindT = "BUSINESS" | "PERSONAL";
 export type FundingMethodT = "STABLECOIN" | "FIAT_LOCAL" | "VIRTUAL_ACCOUNT";

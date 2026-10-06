@@ -14,7 +14,7 @@ const Schema = z.object({
   dest_currency: z.string().length(3).toUpperCase(),
   source_amount: z.number().int().positive(),
   funding_method: z.enum(["STABLECOIN", "FIAT_LOCAL"]),
-  token: z.enum(["USDC", "USDT"]).optional(),
+  token: z.enum(["USDC", "USDT", "EURC"]).optional(),
   prefer: z.enum(["cheapest", "fastest", "balanced", "same_day"]).optional(),
 });
 

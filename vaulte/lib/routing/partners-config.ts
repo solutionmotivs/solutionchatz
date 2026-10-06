@@ -13,7 +13,7 @@ const LegSchema = z.object({
   country: z.string().length(2), jurisdiction: z.string().min(2),
   srcCurrency: z.string().length(3).optional(), destCurrency: z.string().length(3).optional(),
   destCurrencies: z.array(z.string().length(3)).optional(), acceptsFiat: z.array(z.string().length(3)).optional(),
-  rails: z.array(z.string()).min(1), tokens: z.array(z.enum(["USDC", "USDT"])), chains: z.array(Chain),
+  rails: z.array(z.string()).min(1), tokens: z.array(z.enum(["USDC", "USDT", "EURC"])), chains: z.array(Chain),
   spreadBps: z.number().min(0).max(500), feeBps: z.number().min(0).max(500), fixedFeeUsd: z.number().min(0).max(1000),
   etaSec: z.number().int().positive(), minUsd: z.number().positive(), maxUsd: z.number().positive(),
   kinds: z.array(z.enum(["BUSINESS", "PERSONAL"])).min(1), indiaAuth: z.enum(["PA_CB_E", "PA_CB_I", "MTSS", "LRS_AD"]).optional(),

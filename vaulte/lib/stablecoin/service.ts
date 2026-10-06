@@ -25,6 +25,7 @@ import { findRoutes, nextRoute, pickAlternates, rankRoutes, routeCostUsd } from 
 import { bookFailureReversal, bookFundsReceived, bookPayout, finFromTransfer, rebookRevenue } from "@/lib/ledger/transfers";
 import { getPartner } from "@/lib/psp/stablecoin/registry";
 import { emitWebhookEvent } from "@/lib/webhooks/dispatch";
+import { TOKEN_PEG } from "./types";
 import type {
   CostBreakdown, FundingMethodT, Preference, Route, Token, TransferKindT,
 } from "./types";
@@ -173,8 +174,10 @@ export interface BuiltQuote {
 }
 
 export async function evaluateQuote(orgId: string, input: QuoteInput, opts: { ignoreGuardrails?: boolean } = {}): Promise<BuiltQuote> {
-  if (input.fundingMethod === "STABLECOIN" && input.sourceCurrency !== "USD") {
-    throw new ServiceError("INVALID_FUNDING", "Stablecoin funding is priced in USD; use source_currency USD", 400);
+  if (input.fundingMethod === "STABLECOIN") {
+    // A stablecoin is priced in the currency it is redeemable for: USDC/USDT in USD, EURC in EUR.
+    if (input.token && TOKEN_PEG[input.token] !== input.sourceCurrency) throw new ServiceError("INVALID_FUNDING", `${input.token} is priced in ${TOKEN_PEG[input.token]}; use source_currency ${TOKEN_PEG[input.token]}`, 400);
+    if (!input.token && !["USD", "EUR"].includes(input.sourceCurrency)) throw new ServiceError("INVALID_FUNDING", "Stablecoin funding is priced in USD (USDC, USDT) or EUR (EURC); use source_currency USD or EUR", 400);
   }
   if (!Number.isInteger(input.sourceAmount) || input.sourceAmount <= 0) {
     throw new ServiceError("VALIDATION_ERROR", "source_amount must be a positive integer (minor units)", 400);
@@ -387,7 +390,7 @@ export async function issueFunding(transferId: string): Promise<Transfer> {
   if (t.fundingMethod === "STABLECOIN") {
     const token = route.token as Token;
     const chain = route.chain!;
-    const expectedMicro = BigInt(Math.round(Number(t.sourceAmountUsd) * 10_000)); // 1 token = 1 USD; 6 decimals
+    const expectedMicro = BigInt(Math.round(Number(t.sourceAmount) * 10_000)); // 1 token = 1 unit of its peg (USD or EUR) = the source currency; 6 decimals
     const dep = await partner.createDeposit({ transferId: t.id, token, chain, expectedAmountMicro: expectedMicro });
     await db.stablecoinDeposit.create({
       data: {

@@ -1327,6 +1327,24 @@ async function main() {
   check("and a Russian sender", ruSender.status === 422 && ruSender.json.error.code === "COUNTRY_CLOSED", JSON.stringify(ruSender.json?.error));
   check("CNY onshore is fiat only: no stablecoin route into mainland China", (await quoteFor(usSender, await mk("Recv CNY", "CN", "CNY"), "USD", "CNY", 100000, "STABLECOIN", "USDC")).status === 422);
 
+  console.log("== EURC (euro stablecoin, MiCA-friendly) and token/currency pegs");
+  const euSender = await mk("EU Sender", "DE", "EUR");
+  const euRecv = await mk("EU Receiver", "FR", "EUR");
+  const eq = await quoteFor(euSender, euRecv, "EUR", "EUR", 100000, "STABLECOIN", "EURC");
+  check("EURC from an EU sender to an EU recipient quotes in euros", eq.status === 201 && eq.json.route.token === "EURC" && eq.json.source.currency === "EUR" && eq.json.destination.currency === "EUR", JSON.stringify(eq.json?.error ?? eq.json?.route));
+  const et = await api("/api/stablecoin/payins", { method: "POST", key: A.key, body: { quote_id: eq.json.id } });
+  check("the partner issues an EURC deposit address and the amount is in euros (1,000.00 EURC)", et.status === 201 && et.json.funding_instructions?.token === "EURC" && et.json.funding_instructions?.amount_token === "1000.00", JSON.stringify(et.json?.funding_instructions ?? et.json));
+  const e1 = await sim(A.key, { event: "deposit.confirmed", transfer_id: et.json.id });
+  const e2 = await sim(A.key, { event: "payout.completed", transfer_id: et.json.id });
+  check("an EURC transfer settles end to end", e1.json?.transfer_status === "PAYING_OUT" && e2.json?.transfer_status === "COMPLETED", JSON.stringify([e1.json, e2.json]));
+  const eqInr = await quoteFor(euSender, inRecv, "EUR", "INR", 100000, "STABLECOIN", "EURC");
+  check("EURC to INR: euro stablecoin in, rupees land through an authorised India partner", eqInr.status === 201 && eqInr.json.route.token === "EURC" && eqInr.json.route.legs.at(-1).kind === "INDIA_PAYOUT", JSON.stringify(eqInr.json?.error ?? eqInr.json?.route?.token));
+  const wrong1 = await quoteFor(euSender, euRecv, "EUR", "EUR", 100000, "STABLECOIN", "USDC");
+  const wrong2 = await quoteFor(usSender, inRecv, "USD", "INR", 100000, "STABLECOIN", "EURC");
+  check("a token must match the currency it is priced in (USDC in EUR, EURC in USD are refused)", wrong1.status === 400 && wrong1.json.error.code === "INVALID_FUNDING" && wrong2.status === 400 && wrong2.json.error.code === "INVALID_FUNDING", JSON.stringify([wrong1.json?.error, wrong2.json?.error]));
+  const usdtEu = await quoteFor(euSender, euRecv, "EUR", "EUR", 100000, "STABLECOIN", "USDT");
+  check("USDT is refused for euros anyway (and not offered on EU legs)", usdtEu.status === 400);
+
   console.log("== Partner webhook endpoint");
   const body = JSON.stringify({ id: `evt_${uniq}`, type: "deposit.detected", data: { address: "nope" } });
   const sigOk = createHmac("sha256", MOCK_SECRET).update(body).digest("hex");
