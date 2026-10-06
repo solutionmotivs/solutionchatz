@@ -1,5 +1,5 @@
 // Invoice arithmetic in integer minor units. Tax is computed per line and rounded per line (so the PDF, the pay page and the API always agree).
-export interface LineInput { description: string; quantity: number; unit_price: number; tax_rate: number }
+export interface LineInput { description: string; quantity: number; unit_price: number; tax_rate: number; hs_code?: string | null }
 export interface LineOut extends LineInput { net: number; tax: number; total: number }
 
 export function computeLines(lines: LineInput[]): { lines: LineOut[]; subtotal: number; tax: number; total: number; taxByRate: { rate: number; net: number; tax: number }[] } {

@@ -42,10 +42,10 @@ export async function renderInvoicePdf(invoiceId: string): Promise<Uint8Array | 
     ["Tax ID", inv.payerTaxId ?? payerEntity?.taxId ?? "-"], ["Email", inv.recipientEmail ?? "-"],
   ]);
 
-  const calc = computeLines(inv.lineItems.map(l => ({ description: l.description, quantity: l.quantity, unit_price: Number(l.unitPrice), tax_rate: l.taxRate })));
+  const calc = computeLines(inv.lineItems.map(l => ({ description: l.description, quantity: l.quantity, unit_price: Number(l.unitPrice), tax_rate: l.taxRate, hs_code: l.hsCode })));
   w.h2("Items");
   w.table(["Description", "Qty", "Unit price", "Tax %", "Tax", "Total"],
-    calc.lines.map(l => [l.description, String(l.quantity), money(BigInt(l.unit_price), inv.currency), `${l.tax_rate}%`, money(BigInt(l.tax), inv.currency), money(BigInt(l.total), inv.currency)]),
+    calc.lines.map(l => [l.hs_code ? `${l.description} (HS ${l.hs_code})` : l.description, String(l.quantity), money(BigInt(l.unit_price), inv.currency), `${l.tax_rate}%`, money(BigInt(l.tax), inv.currency), money(BigInt(l.total), inv.currency)]),
     [190, 40, 80, 40, 70, 73]);
   w.kv([["Subtotal", money(BigInt(calc.subtotal), inv.currency)], ...calc.taxByRate.filter(t => t.rate > 0).map(t => [`Tax ${t.rate}% on ${money(BigInt(t.net), inv.currency)}`, money(BigInt(t.tax), inv.currency)] as [string, string]), ["Total", money(BigInt(calc.total), inv.currency)]]);
   w.page.drawText(clean(`Amount due: ${money(BigInt(calc.total), inv.currency)}`), { x: w.M, y: w.y - 14, size: 13, font: bold, color: rgb(0.1, 0.1, 0.15) }); w.y -= 28;

@@ -5,8 +5,8 @@ import { ErrorBox } from "@/components/auth/AuthShell";
 import { Chip, Section, Shell } from "@/components/verification/shared";
 
 interface Entity { id: string; legalName: string; country: string; currency: string }
-interface Line { description: string; quantity: string; unit_price: string; tax_rate: string }
-const blank = (): Line => ({ description: "", quantity: "1", unit_price: "", tax_rate: "0" });
+interface Line { description: string; quantity: string; unit_price: string; tax_rate: string; hs: string }
+const blank = (): Line => ({ description: "", quantity: "1", unit_price: "", tax_rate: "0", hs: "" });
 const major = (minor: number, ccy: string) => (minor / (["JPY", "KRW"].includes(ccy) ? 1 : 100)).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const toMinor = (v: string, ccy: string) => Math.round(Number(v || 0) * (["JPY", "KRW"].includes(ccy) ? 1 : 100));
 const CHIP: Record<string, string> = { PAID: "APPROVED", SENT: "IN_REVIEW", DRAFT: "DRAFT", CANCELLED: "REJECTED", OVERDUE: "NEEDS_INFO", PARTIALLY_PAID: "IN_REVIEW" };
@@ -18,6 +18,8 @@ export default function InvoicesClient({ role, entities }: { role: string; entit
   const [kind, setKind] = useState<"INVOICE" | "PROFORMA">("INVOICE");
   const [f, setF] = useState({ currency: entities[0]?.currency ?? "USD", issuer: entities[0]?.id ?? "", payer_name: "", payer_email: "", payer_address: "", payer_tax_id: "", reference: "", due_date: "", notes: "" });
   const [lines, setLines] = useState<Line[]>([blank()]);
+  const [hsOpts, setHsOpts] = useState<{ code: string; description: string }[]>([]);
+  async function hsSearch(q: string) { if (q.trim().length < 3) return setHsOpts([]); const r = await api(`/api/hs?q=${encodeURIComponent(q)}`); if (r.ok) setHsOpts(r.data.data.slice(0, 12)); }
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => { const r = await api("/api/invoices?per_page=50"); if (r.ok) setRows(r.data.data); }, []);
@@ -29,7 +31,7 @@ export default function InvoicesClient({ role, entities }: { role: string; entit
     setErr(""); setMsg(""); setBusy(true);
     const body: any = {
       kind, currency: f.currency, ...(f.issuer ? { issuer_entity_id: f.issuer } : {}),
-      line_items: lines.filter(l => l.description).map(l => ({ description: l.description, quantity: Number(l.quantity), unit_price: toMinor(l.unit_price, f.currency), tax_rate: Number(l.tax_rate || 0) })),
+      line_items: lines.filter(l => l.description).map(l => ({ description: l.description, quantity: Number(l.quantity), unit_price: toMinor(l.unit_price, f.currency), tax_rate: Number(l.tax_rate || 0), ...(l.hs.trim() ? { hs_code: l.hs.trim() } : {}) })),
     };
     for (const [k, v] of Object.entries({ payer_name: f.payer_name, payer_email: f.payer_email, payer_address: f.payer_address, payer_tax_id: f.payer_tax_id, reference: f.reference, due_date: f.due_date, notes: f.notes })) if (v) body[k] = v;
     const r = await api("/api/invoices", { body });
@@ -63,10 +65,12 @@ export default function InvoicesClient({ role, entities }: { role: string; entit
             <div><label className="label-text">PO / reference</label><input className="input-field" value={f.reference} onChange={e => setF({ ...f, reference: e.target.value })} /></div>
           </div>
           <div className="mt-5">
-            <div className="grid grid-cols-[1fr_70px_110px_70px_30px] gap-2 text-[9px] uppercase tracking-widest text-mist mb-1"><span>Description</span><span>Qty</span><span>Unit price</span><span>Tax %</span><span /></div>
+            <div className="grid grid-cols-[1fr_120px_70px_110px_70px_30px] gap-2 text-[9px] uppercase tracking-widest text-mist mb-1"><span>Description</span><span>HS code (goods)</span><span>Qty</span><span>Unit price</span><span>Tax %</span><span /></div>
+            <datalist id="hs-list">{hsOpts.map(o => <option key={o.code} value={o.code}>{o.description}</option>)}</datalist>
             {lines.map((l, i) => (
-              <div key={i} className="grid grid-cols-[1fr_70px_110px_70px_30px] gap-2 mb-2">
+              <div key={i} className="grid grid-cols-[1fr_120px_70px_110px_70px_30px] gap-2 mb-2">
                 <input className="input-field" aria-label={`Description ${i + 1}`} value={l.description} onChange={e => setLines(lines.map((x, j) => j === i ? { ...x, description: e.target.value } : x))} />
+                <input className="input-field" list="hs-list" aria-label={`HS code ${i + 1}`} placeholder="e.g. 620342" value={l.hs} onChange={e => { setLines(lines.map((x, j) => j === i ? { ...x, hs: e.target.value } : x)); hsSearch(e.target.value); }} onFocus={() => hsSearch(l.hs || l.description)} />
                 <input className="input-field" aria-label={`Quantity ${i + 1}`} type="number" min="0" step="any" value={l.quantity} onChange={e => setLines(lines.map((x, j) => j === i ? { ...x, quantity: e.target.value } : x))} />
                 <input className="input-field" aria-label={`Unit price ${i + 1}`} type="number" min="0" step="0.01" value={l.unit_price} onChange={e => setLines(lines.map((x, j) => j === i ? { ...x, unit_price: e.target.value } : x))} />
                 <input className="input-field" aria-label={`Tax ${i + 1}`} type="number" min="0" max="100" step="any" value={l.tax_rate} onChange={e => setLines(lines.map((x, j) => j === i ? { ...x, tax_rate: e.target.value } : x))} />

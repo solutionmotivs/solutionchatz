@@ -5,6 +5,7 @@ const Line = z.object({
   quantity: z.number().positive().max(1e9),
   unit_price: z.number().int().min(0).max(1e12),
   tax_rate: z.number().min(0).max(100).default(0),
+  hs_code: z.string().max(14).optional(),
 });
 
 export const CreateInvoiceSchema = z.object({

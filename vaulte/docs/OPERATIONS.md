@@ -29,3 +29,23 @@ Alert if any job returns non-200 twice in a row, if the sanctions lists are olde
 - **Partner down**: failover is automatic where an alternate partner exists on the quote; otherwise transfers fail and reverse. Remove the partner's legs from `PARTNER_CATALOG_JSON` to stop new quotes.
 - **Webhook backlog**: dead letters are replayable per event; for a whole endpoint, fix the receiver, then replay from the dashboard.
 - **Key rotation**: `JWT_SECRET` (signs sessions: rotating logs everyone out), `OTP_PEPPER` (invalidates codes in flight), `CRON_SECRET`, partner and vendor secrets (rotate at the provider first). `ENCRYPTION_KEY` rotation needs a re-encryption job (not implemented: plan it before launch).
+
+## Scheduled jobs (all automatic)
+
+Nine recurring jobs keep the product current without anyone clicking. Run them **either** inside the app **or** from an external cron; both go through the same database lease, so running both is harmless.
+
+| Job (`name`) | Every | Does |
+|---|---|---|
+| `webhooks` | 1 min | delivers due customer webhooks (retries, dead-letter) |
+| `erp-sync` | 15 min | pushes completed transfers to connected accounting systems |
+| `slow-transfers` | 10 min | flags transfers in flight past twice their quoted time and emails `OPS_EMAIL` |
+| `escrow-deadlines` | 1 h | deemed approvals after the agreed window |
+| `certificate-poll` | 1 h (each transfer re-checked every `CERT_POLL_INTERVAL_MIN`, default 6 h) | asks payout partners for eFIRA/eBRC still missing |
+| `sanctions-ofac`, `sanctions-un`, `sanctions-uk` | 24 h | refresh the lists (skip when unchanged; one list per run keeps memory low) |
+| `sanctions-rescreen` | 24 h | re-screen customers, owners and counterparties against the current lists |
+
+**In-app scheduler:** set `ENABLE_INTERNAL_SCHEDULER=true` on an always-on instance. It starts the jobs 20 seconds after boot, staggered. A free-tier instance that sleeps when idle does **not** run timers: use an external cron there.
+
+**External cron:** `POST /api/internal/jobs/run?name=<job>[&force=1]` with header `x-cron-secret: $CRON_SECRET` (any scheduler: Render cron job, GitHub Actions `schedule:`, cron-job.org). Older single-purpose endpoints still work: `/api/internal/webhooks/run`, `/erp/sync`, `/escrow/run`, `/transfers/watchdog`, `/documents/poll`, `/sanctions/sync?list=UK`, `/sanctions/rescreen`.
+
+**Visibility:** staff `GET /api/admin/jobs` shows each job's last run, success flag, duration and result. A job that never ran or last failed is the first thing to check when something looks stale.

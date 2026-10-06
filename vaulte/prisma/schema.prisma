@@ -437,6 +437,8 @@ model InvoiceLineItem {
   unitPrice   BigInt
   taxRate     Float  @default(0)
   total       BigInt
+  /// HS code (digits) for goods, validated against HS 2022
+  hsCode      String?
 
   invoiceId String
   invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
@@ -1285,4 +1287,15 @@ model InboundMessage {
   resolvedAt   DateTime?
 
   @@index([status])
+}
+
+/// Lease + last result for each scheduled job, so several instances never run the same job at once and staff can see what ran when.
+model JobLease {
+  name        String    @id
+  lockedUntil DateTime  @default(now())
+  owner       String?
+  lastRunAt   DateTime?
+  lastOk      Boolean?
+  lastResult  Json?
+  lastMs      Int?
 }

@@ -1,6 +1,7 @@
 // Orchestration for stablecoin / fiat cross-border transfers.
 // Vaulte never custodies funds: partners receive money, convert, and pay out. This service
 // picks routes, enforces guardrails, keeps the memo ledger, and reacts to partner events.
+import { flagsForInvoice, tradeReviewReason } from "@/lib/trade/transfer";
 import { closedCountryList, currencyStatus, expOf } from "@/lib/currency";
 import { buildTiming, type Timing } from "@/lib/routing/timing";
 import { corridorTiming } from "@/lib/routing/settlement-metrics";
@@ -343,6 +344,8 @@ export async function createTransferFromQuote(orgId: string, input: CreateTransf
   const guard = evaluateTransfer(ctx);
   const blocking = guard.violations.filter(v => !VERIFICATION_ONLY.has(v.code));
   if (blocking.length) throw new ServiceError("GUARDRAIL_VIOLATION", "This transfer is not allowed", 422, blocking);
+  const prohibitedGoods = (await flagsForInvoice(input.invoiceId)).find(f => f.severity === "PROHIBITED");
+  if (prohibitedGoods) throw new ServiceError("HS_PROHIBITED", prohibitedGoods.reason, 422);
 
   // Claim the quote atomically so two requests cannot use it twice.
   const claimed = await db.quote.updateMany({ where: { id: quote.id, status: "ACTIVE" }, data: { status: "USED" } });
@@ -455,6 +458,10 @@ async function onFundsConfirmed(transferId: string, opts: { receivedMicro?: bigi
     }
     await db.stablecoinDeposit.update({ where: { id: dep.id }, data: { status: "CONFIRMED", receivedAmount: opts.receivedMicro } });
   }
+
+  // Goods that need a second pair of eyes (precious metals, dual-use, chemicals...) are held after the funds are confirmed and before any payout.
+  const tradeHold = await tradeReviewReason(t.id, t.invoiceId);
+  if (tradeHold) return quarantine(t.id, tradeHold, true);
 
   await db.$transaction(async tx => {
     await tx.transfer.update({ where: { id: t.id }, data: { status: "FUNDS_DETECTED", statusReason: null, fundedAt: t.fundedAt ?? new Date() } });

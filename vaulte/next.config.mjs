@@ -31,6 +31,7 @@ const securityHeaders = [
 const nextConfig = {
   poweredByHeader: false,
   experimental: {
+    instrumentationHook: true,
     serverComponentsExternalPackages: ["@prisma/client", "bcryptjs", "pdf-lib", "@aws-sdk/client-s3"],
   },
   // The image optimiser is not used; turning it off removes that attack surface (Next 14.x advisories about remotePatterns).

@@ -1373,7 +1373,7 @@ async function main() {
   console.log("== Certificate auto-update: partner poll, inbound email, EDPMS import");
   const cronPost = (path, headers = {}) => fetch(`${BASE}${path}`, { method: "POST", headers: { "x-cron-secret": process.env.CRON_SECRET, ...headers } });
   const gq = await api("/api/quotes", { method: "POST", key: A.key, body: { kind: "BUSINESS", sender_entity_id: payer, recipient_entity_id: exporter, source_currency: "USD", dest_currency: "INR", source_amount: 500000, funding_method: "STABLECOIN", token: "USDC", prefer: "cheapest" } });
-  const gInv = await api("/api/invoices", { method: "POST", key: A.key, body: { number: `INV-${uniq}-GOODS`, currency: "USD", purpose_code: "P0103", line_items: [{ description: "Garments", quantity: 1, unit_price: 500000 }] } });
+  const gInv = await api("/api/invoices", { method: "POST", key: A.key, body: { number: `INV-${uniq}-GOODS`, currency: "USD", purpose_code: "P0103", line_items: [{ description: "Garments", quantity: 1, unit_price: 500000, hs_code: "6203.42" }] } });
   const gt = await api("/api/stablecoin/payins", { method: "POST", key: A.key, body: { quote_id: gq.json.id, invoice_id: gInv.json.id, purpose_code: "P0103" } });
   await sim(A.key, { event: "deposit.confirmed", transfer_id: gt.json.id }); await sim(A.key, { event: "payout.completed", transfer_id: gt.json.id });
   const gDone = await api(`/api/stablecoin/payins/${gt.json.id}`, { key: A.key });
@@ -1412,6 +1412,43 @@ async function main() {
   const irmDoc = await db.document.findFirst({ where: { transferId: tIn2.id, type: "IRM" } });
   check("an EDPMS/IRM CSV import attaches the IRM to the transfer named by reference (staff-imported, verified) and reports rows it will not guess", recon.status === 200 && recon.json.matched === 1 && irmDoc?.number === `IRM-${uniq}-1` && irmDoc.source === "RECONCILIATION" && irmDoc.status === "VERIFIED" && recon.json.unmatched.length === 2, JSON.stringify(recon.json));
   check("only staff can import", [401, 403].includes((await api("/api/admin/documents/reconcile", { method: "POST", jar: A.jar, body: { csv } })).status));
+
+  console.log("== HS codes and trade compliance");
+  const hsQ = await api("/api/hs?q=cotton%20trousers");
+  check("HS search by words finds the 6-digit subheading", hsQ.status === 200 && hsQ.json.data.some(e => e.code === "620342"), JSON.stringify(hsQ.json).slice(0, 160));
+  check("HS search by code prefix", (await api("/api/hs?q=6203")).json.data.every(e => e.code.startsWith("6203")));
+  const hsOk = await api("/api/hs/6203.42"), hsNat = await api("/api/hs/62034200"), hsBad = await api("/api/hs/999999");
+  check("a code is validated against HS 2022; an 8-digit national code is accepted only on its 6-digit base and flagged unchecked; garbage is refused", hsOk.status === 200 && hsOk.json.code === "620342" && hsNat.json.national_extension_unchecked === true && hsBad.status === 404 && hsBad.json.error.code === "INVALID_HS", JSON.stringify([hsOk.json?.code, hsNat.json?.national_extension_unchecked, hsBad.json?.error?.code]));
+  check("flags are visible on lookup (arms prohibited, gold needs review)", (await api("/api/hs/930190")).json.flags[0]?.severity === "PROHIBITED" && (await api("/api/hs/710812")).json.flags[0]?.severity === "REVIEW");
+  const gi = (hs, extra = {}) => api("/api/invoices", { method: "POST", key: A.key, body: { currency: "USD", purpose_code: "P0103", ...extra, line_items: [{ description: "Goods", quantity: 1, unit_price: 100000, ...(hs ? { hs_code: hs } : {}) }] } });
+  const noHs = await gi(null), badHs = await gi("999999"), arms = await gi("9301.90"), okHs = await gi("620342");
+  check("a goods invoice (P01xx) needs an HS code of at least 6 digits on every line", noHs.status === 400 && noHs.json.error.code === "HS_CODE_REQUIRED", JSON.stringify(noHs.json?.error));
+  check("an invalid HS code is refused with the line it is on", badHs.status === 400 && badHs.json.error.code === "INVALID_HS_CODE" && /Line 1/.test(badHs.json.error.message));
+  check("arms (chapter 93) are refused outright by the acceptable-use rule", arms.status === 422 && arms.json.error.code === "HS_PROHIBITED", JSON.stringify(arms.json?.error));
+  check("a valid HS code is stored normalised and shown on the invoice", okHs.status === 201 && okHs.json.line_items[0].hs_code === "620342", JSON.stringify(okHs.json?.line_items));
+  check("services invoices do not need one", (await api("/api/invoices", { method: "POST", key: A.key, body: { currency: "USD", purpose_code: "P0802", line_items: [{ description: "Consulting", quantity: 1, unit_price: 1000 }] } })).status === 201);
+  const goldInv = await gi("710812");
+  const goldQ = await api("/api/quotes", { method: "POST", key: A.key, body: { kind: "BUSINESS", sender_entity_id: payer, recipient_entity_id: exporter, source_currency: "USD", dest_currency: "INR", source_amount: 500000, funding_method: "STABLECOIN", token: "USDC", prefer: "cheapest" } });
+  const goldT = await api("/api/stablecoin/payins", { method: "POST", key: A.key, body: { quote_id: goldQ.json.id, invoice_id: goldInv.json.id, purpose_code: "P0103" } });
+  const goldFunded = await sim(A.key, { event: "deposit.confirmed", transfer_id: goldT.json.id });
+  check("gold (chapter 71) is held for staff review after the funds arrive and before any payout", goldFunded.json?.transfer_status === "QUARANTINED" && /TRADE_REVIEW: PRECIOUS_METALS_STONES/.test(goldFunded.json?.status_reason ?? ""), JSON.stringify(goldFunded.json));
+  const goldRel = await api(`/api/admin/transfers/${goldT.json.id}/review`, { method: "POST", jar: staffJar, body: { decision: "RELEASE", note: "Checked licence and buyer" } });
+  check("staff release it and it is not held a second time", goldRel.json?.status === "PAYING_OUT", JSON.stringify(goldRel.json));
+  check("and it completes", (await sim(A.key, { event: "payout.completed", transfer_id: goldT.json.id })).json?.transfer_status === "COMPLETED");
+
+  console.log("== Scheduled jobs (leases, last results)");
+  const jobPost = (q, headers = { "x-cron-secret": process.env.CRON_SECRET }) => fetch(`${BASE}/api/internal/jobs/run?${q}`, { method: "POST", headers });
+  check("running a job needs the cron secret and a known name", (await jobPost("name=webhooks", {})).status === 401 && (await jobPost("name=nope")).status === 400);
+  await db.jobLease.deleteMany({ where: { name: "webhooks" } });
+  const jobRun1 = await (await jobPost("name=webhooks")).json(), jobRun2 = await (await jobPost("name=webhooks")).json(), jobRun3 = await (await jobPost("name=webhooks&force=1")).json();
+  check("a job runs, is skipped when it just ran (another instance may have it), and can be forced", jobRun1.status === "ran" && jobRun2.status === "skipped" && jobRun3.status === "ran", JSON.stringify([jobRun1, jobRun2, jobRun3]));
+  await db.jobLease.update({ where: { name: "webhooks" }, data: { lockedUntil: new Date(Date.now() + 600_000), lastRunAt: new Date(Date.now() - 3600_000) } });
+  check("a job whose lease is held elsewhere is not run twice", (await (await jobPost("name=webhooks")).json()).status === "skipped");
+  await db.jobLease.update({ where: { name: "webhooks" }, data: { lockedUntil: new Date(0) } });
+  const jobsList = await api("/api/admin/jobs", { jar: staffJar });
+  check("staff see each job with its last run and result; customers cannot", jobsList.status === 200 && jobsList.json.jobs.length >= 9 && jobsList.json.jobs.find(j => j.name === "webhooks")?.last_ok === true && jobsList.json.jobs.some(j => j.name === "certificate-poll") && [401, 403].includes((await api("/api/admin/jobs", { jar: A.jar })).status), JSON.stringify(jobsList.json).slice(0, 200));
+  const jobPoll = await (await jobPost("name=certificate-poll&force=1")).json();
+  check("the certificate poll and the watchdog run through the same lease path", jobPoll.status === "ran" && (await (await jobPost("name=slow-transfers&force=1")).json()).status === "ran", JSON.stringify(jobPoll));
 
   console.log("== Partner webhook endpoint");
   const body = JSON.stringify({ id: `evt_${uniq}`, type: "deposit.detected", data: { address: "nope" } });

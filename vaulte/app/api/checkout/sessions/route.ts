@@ -13,7 +13,7 @@ const Schema = z.object({
   currency: z.string().length(3).toUpperCase(),
   amount: z.number().int().positive().max(1e12).optional(),
   description: z.string().max(300).optional(),
-  line_items: z.array(z.object({ description: z.string().min(1).max(300), quantity: z.number().positive().max(1e9).default(1), unit_price: z.number().int().min(0).max(1e12), tax_rate: z.number().min(0).max(100).default(0) })).min(1).max(100).optional(),
+  line_items: z.array(z.object({ description: z.string().min(1).max(300), quantity: z.number().positive().max(1e9).default(1), unit_price: z.number().int().min(0).max(1e12), tax_rate: z.number().min(0).max(100).default(0), hs_code: z.string().max(14).optional() })).min(1).max(100).optional(),
   success_url: z.string().url().max(2000).optional(),
   cancel_url: z.string().url().max(2000).optional(),
   customer_email: z.string().email().optional(),
@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
   try {
     const inv = await createInvoice(a.organizationId, {
       currency: d.currency, issuerEntityId: d.issuer_entity_id, payerEmail: d.customer_email, payerName: d.customer_name, reference: d.client_reference_id,
-      lines: d.line_items?.map(l => ({ description: l.description, quantity: l.quantity, unit_price: l.unit_price, tax_rate: l.tax_rate })) ?? [{ description: d.description ?? "Order", quantity: 1, unit_price: d.amount!, tax_rate: 0 }],
+      lines: d.line_items?.map(l => ({ description: l.description, quantity: l.quantity, unit_price: l.unit_price, tax_rate: l.tax_rate, hs_code: l.hs_code })) ?? [{ description: d.description ?? "Order", quantity: 1, unit_price: d.amount!, tax_rate: 0 }],
       successUrl: d.success_url, cancelUrl: d.cancel_url, source: "CHECKOUT", requireIssuer: true, purposeCode: d.purpose_code, prefix: PREFIX.CHECKOUT,
     });
     const live = await db.invoice.update({ where: { id: inv.id }, data: { status: "SENT" } });

@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
       kind: d.kind, number: d.number, currency: d.currency, issuerEntityId: d.issuer_entity_id, payerEntityId: d.payer_entity_id,
       payerName: d.payer_name, payerEmail: d.payer_email, payerAddress: d.payer_address, payerTaxId: d.payer_tax_id, reference: d.reference,
       dueDate: d.due_date, notes: d.notes, purposeCode: d.purpose_code, source: a.via === "key" ? "API" : "DASHBOARD",
-      lines: d.line_items.map(l => ({ description: l.description, quantity: l.quantity, unit_price: l.unit_price, tax_rate: l.tax_rate })),
+      lines: d.line_items.map(l => ({ description: l.description, quantity: l.quantity, unit_price: l.unit_price, tax_rate: l.tax_rate, hs_code: l.hs_code })),
     });
     return apiSuccess(presentInvoice(inv), 201);
   } catch (e) {
