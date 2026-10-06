@@ -222,7 +222,8 @@ export const OCR_TYPES = new Set(["ID_PROOF", "PAN_CARD", "CERT_OF_INCORPORATION
 export async function ocrDocument(docId: string, type: string, data: Buffer, mime: string) {
   const svc = getKycServices();
   if (!svc || !OCR_TYPES.has(type)) return null;
-  const r = await svc.ocr({ docType: type, data, mime });
+  const personNameHint = (await db.verificationDocument.findUnique({ where: { id: docId }, select: { person: { select: { fullName: true } } } }))?.person?.fullName;
+  const r = await svc.ocr({ docType: type, data, mime, nameHint: personNameHint });
   if (r.status === "UNAVAILABLE") return { status: r.status, reason: r.reason };
   const ocr = { status: r.status, provider: svc.name, fields: r.fields, quality: r.quality, at: new Date().toISOString() };
   const doc = await db.verificationDocument.findUnique({ where: { id: docId }, include: { case: true, person: true } });

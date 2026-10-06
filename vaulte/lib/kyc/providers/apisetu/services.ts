@@ -18,7 +18,8 @@ export interface KycServices {
   ckycSearch(i: { idType: "PAN" | "PASSPORT" | "VOTER" | "DL" | "CKYC"; idNumber: string; dob?: string }): Promise<CkycStart>;
   ckycDownload(i: { referenceId: string; otp: string }): Promise<CkycRecord>;
   amlPep(i: { name: string; dob?: string; country?: string; kind: "INDIVIDUAL" | "ENTITY" }): Promise<PepResult>;
-  ocr(i: { docType: string; data: Buffer; mime: string }): Promise<OcrResult>;
+  /** `nameHint` is used only by the DEMO_MODE mock (it echoes it); real providers ignore it. */
+  ocr(i: { docType: string; data: Buffer; mime: string; nameHint?: string }): Promise<OcrResult>;
 }
 
 const maskId = (s: string) => (s.length <= 4 ? "*".repeat(s.length) : "*".repeat(Math.min(s.length - 4, 12)) + s.slice(-4));
@@ -66,7 +67,7 @@ export class ApisetuServices implements KycServices {
     } catch (e) { return { status: "UNAVAILABLE", pep: false, sanctioned: false, adverseMedia: false, matches: [], reason: e instanceof Error ? e.message : "AML/PEP unavailable" }; }
   }
 
-  async ocr(i: { docType: string; data: Buffer; mime: string }): Promise<OcrResult> {
+  async ocr(i: { docType: string; data: Buffer; mime: string; nameHint?: string }): Promise<OcrResult> {
     try {
       const body = { document_type: i.docType, mime_type: i.mime, image_base64: i.data.toString("base64") };
       const [x, q] = await Promise.all([this.c.post(this.c.paths.ocr, body), this.c.post(this.c.paths.ocrQuality, body).catch(() => null)]);
@@ -93,11 +94,13 @@ export class MockApisetu implements KycServices {
     const pep = /\bPEP\b/i.test(i.name);
     return pep ? { status: "REVIEW", pep: true, sanctioned: false, adverseMedia: false, matches: [{ name: i.name, category: "PEP", list: "MOCK_PEP", score: 0.97 }] } : { status: "CLEAR", pep: false, sanctioned: false, adverseMedia: false, matches: [] };
   }
-  async ocr(i: { data: Buffer }): Promise<OcrResult> {
+  async ocr(i: { data: Buffer; docType?: string; nameHint?: string }): Promise<OcrResult> {
     const t = i.data.toString("latin1");
     const get = (k: string) => new RegExp(`${k}:([^;\\r\\n\\\\)]+)`).exec(t)?.[1]?.trim();
     const blur = get("BLUR") === "1";
-    return { status: blur ? "POOR_QUALITY" : "OK", fields: { name: get("NAME"), dob: get("DOB"), idNumberMasked: get("ID") ? maskId(get("ID")!) : undefined }, quality: { score: blur ? 0.2 : 0.95, issues: blur ? ["image is blurry"] : [] } };
+    // Public demo only: a visitor's sample file has no markers, so the mock reads a plausible name (what they typed for a person, a sample company name for a business document).
+    const demoName = process.env.DEMO_MODE === "true" && !get("NAME") && !blur ? (i.nameHint?.toUpperCase() || (i.docType && /INCORPORATION|REGISTRY|TRADE_LICENCE|GST/.test(i.docType) ? "DEMO TRADING LLC" : undefined)) : undefined;
+    return { status: blur ? "POOR_QUALITY" : "OK", fields: { name: get("NAME") ?? demoName, dob: get("DOB"), idNumberMasked: get("ID") ? maskId(get("ID")!) : undefined }, quality: { score: blur ? 0.2 : 0.95, issues: blur ? ["image is blurry"] : [] } };
   }
 }
 
