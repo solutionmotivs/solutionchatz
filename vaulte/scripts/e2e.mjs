@@ -1327,6 +1327,30 @@ async function main() {
   check("and a Russian sender", ruSender.status === 422 && ruSender.json.error.code === "COUNTRY_CLOSED", JSON.stringify(ruSender.json?.error));
   check("CNY onshore is fiat only: no stablecoin route into mainland China", (await quoteFor(usSender, await mk("Recv CNY", "CN", "CNY"), "USD", "CNY", 100000, "STABLECOIN", "USDC")).status === 422);
 
+  console.log("== Virtual accounts: capabilities, local details per currency, credits");
+  const capsR = await api("/api/virtual-accounts/capabilities", { jar: A.jar });
+  const capHas = c => capsR.json.options?.find(o => o.currency === c);
+  check("capabilities list what can be opened now (test mode: simulated), with the kind of local details", capsR.status === 200 && capsR.json.mode === "test" && ["EUR", "GBP", "USD", "CAD", "AUD", "JPY", "CNH"].every(c => capHas(c)) && capHas("CAD").details_type === "CA_TRANSIT" && capHas("CAD").partner_kind === "simulated", JSON.stringify(capsR.json).slice(0, 200));
+  const caE = await mk("CA Holder", "CA", "CAD"), auE = await mk("AU Holder", "AU", "AUD"), jpE = await mk("JP Holder", "JP", "JPY"), gbE = await mk("GB Holder", "GB", "GBP");
+  const vaCad = await api("/api/virtual-accounts", { method: "POST", key: A.key, body: { entity_id: caE, country: "CA", currency: "CAD", sweep_dest_currency: "USD" } });
+  check("a CAD account gets Canadian institution/transit/account numbers", vaCad.status === 201 && !!vaCad.json.account_details.institution_number && !!vaCad.json.account_details.transit_number && vaCad.json.simulated === true, JSON.stringify(vaCad.json).slice(0, 220));
+  const vaAud = await api("/api/virtual-accounts", { method: "POST", key: A.key, body: { entity_id: auE, country: "AU", currency: "AUD", sweep_dest_currency: "USD" } });
+  check("an AUD account gets a BSB", vaAud.status === 201 && !!vaAud.json.account_details.bsb, JSON.stringify(vaAud.json).slice(0, 200));
+  const vaJpy = await api("/api/virtual-accounts", { method: "POST", jar: A.jar, body: { entity_id: jpE, country: "JP", currency: "JPY", sweep_dest_currency: "USD" } });
+  check("the dashboard (session) can open an account too", vaJpy.status === 201 && vaJpy.json.currency === "JPY", JSON.stringify(vaJpy.json).slice(0, 200));
+  const vaBad = await api("/api/virtual-accounts", { method: "POST", key: A.key, body: { entity_id: gbE, country: "DE", currency: "GBP", sweep_dest_currency: "USD" } });
+  const vaRub = await api("/api/virtual-accounts", { method: "POST", key: A.key, body: { entity_id: gbE, country: "RU", currency: "RUB", sweep_dest_currency: "USD" } });
+  check("a currency is tied to its country (GBP in Germany) and RUB has no partner: NO_PARTNER", vaBad.json?.error?.code === "NO_PARTNER" && vaRub.json?.error?.code === "NO_PARTNER", JSON.stringify([vaBad.json?.error, vaRub.json?.error]));
+  check("another organization cannot read the account", (await api(`/api/virtual-accounts/${vaCad.json.id}`, { jar: B.jar })).status === 404);
+  const vc = await sim(A.key, { event: "virtual_account.credit", virtual_account_id: vaCad.json.id, amount: 150000, sender_name: "Toronto Client Inc", sender_country: "CA" });
+  const vcT = await db.transfer.findFirst({ where: { fundingMethod: "VIRTUAL_ACCOUNT", fundingInstructions: { path: ["virtual_account_id"], equals: vaCad.json.id } } });
+  check("a credit converts and starts paying out straight away (no balance kept)", !!vcT && ["PAYING_OUT", "COMPLETED", "QUARANTINED"].includes(vcT.status), JSON.stringify([vc.json, vcT?.status, vcT?.statusReason]));
+  if (vcT?.status === "PAYING_OUT") await sim(A.key, { event: "payout.completed", transfer_id: vcT.id });
+  const vaDetail = await api(`/api/virtual-accounts/${vaCad.json.id}`, { jar: A.jar });
+  check("the account shows each credit with its status and the seconds from funds confirmed to completed", vaDetail.status === 200 && vaDetail.json.credits.length === 1 && vaDetail.json.credits[0].received.currency === "CAD" && (vaDetail.json.credits[0].status !== "COMPLETED" || typeof vaDetail.json.credits[0].seconds_to_complete === "number"), JSON.stringify(vaDetail.json.credits));
+  const vaPage = await fetch(`${BASE}/dashboard/virtual-accounts`, { headers: { Cookie: A.jar.cookie }, redirect: "manual" });
+  check("the virtual accounts page renders for a signed-in user", vaPage.status === 200 && (await vaPage.text()).includes("Virtual accounts"));
+
   console.log("== EURC (euro stablecoin, MiCA-friendly) and token/currency pegs");
   const euSender = await mk("EU Sender", "DE", "EUR");
   const euRecv = await mk("EU Receiver", "FR", "EUR");

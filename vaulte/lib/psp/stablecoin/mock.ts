@@ -49,6 +49,8 @@ export class MockPartner implements StablecoinPartner {
     if (req.currency === "EUR") details.iban = `MOCKEU${rid(8).toUpperCase()}`;
     else if (req.currency === "GBP") { details.sort_code = "00-00-00"; details.account_number = String(Math.floor(Math.random() * 1e8)).padStart(8, "0"); }
     else if (req.currency === "USD") { details.routing_number = "000000000"; details.account_number = String(Math.floor(Math.random() * 1e10)).padStart(10, "0"); }
+    else if (req.currency === "CAD") { details.institution_number = "000"; details.transit_number = "00000"; details.account_number = String(Math.floor(Math.random() * 1e9)).padStart(9, "0"); }
+    else if (req.currency === "AUD") { details.bsb = "000-000"; details.account_number = String(Math.floor(Math.random() * 1e9)).padStart(9, "0"); }
     else details.account_number = `MOCK${rid(6).toUpperCase()}`;
     return { partnerRef: `mock_va_${rid(6)}`, details };
   }
