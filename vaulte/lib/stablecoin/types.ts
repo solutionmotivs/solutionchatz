@@ -5,7 +5,7 @@ export type Token = "USDC" | "USDT";
 export type Chain = "solana" | "base" | "ethereum" | "tron" | "polygon";
 export type TransferKindT = "BUSINESS" | "PERSONAL";
 export type FundingMethodT = "STABLECOIN" | "FIAT_LOCAL" | "VIRTUAL_ACCOUNT";
-export type Preference = "cheapest" | "fastest" | "balanced";
+export type Preference = "cheapest" | "fastest" | "balanced" | "same_day";
 
 /** Which regulatory permission the partner holds for an India-facing leg. */
 export type IndiaAuth = "PA_CB_E" | "PA_CB_I" | "MTSS" | "LRS_AD";

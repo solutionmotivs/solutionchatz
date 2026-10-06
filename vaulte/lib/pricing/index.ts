@@ -30,11 +30,28 @@ export const MAX_TOTAL_COST_BPS = 300;
 /** Typical bank wire cost used only for the on-screen comparison (estimate, labelled as such). */
 export const BANK_WIRE_ESTIMATE = { fixedUsd: 30, spreadBps: 250 };
 
-export function markupBpsFor(kind: TransferKindT, amountUsd: number, tiers = MARKUP_TIERS): number {
+/**
+ * Per-corridor markup overrides, configured by the operator (not hard-coded): env MARKUP_BPS_CORRIDORS =
+ * [{"from":"US","to":"IN","kind":"BUSINESS","bps":18}] ("*" matches any). The most specific match wins; the minimum margin floor still applies.
+ */
+export interface CorridorMarkup { from?: string; to?: string; kind?: TransferKindT | "*"; bps: number }
+export function corridorMarkups(env: NodeJS.ProcessEnv = process.env): CorridorMarkup[] {
+  try { const j = JSON.parse(env.MARKUP_BPS_CORRIDORS ?? "[]"); return Array.isArray(j) ? j.filter(x => Number.isFinite(x?.bps) && x.bps >= 0 && x.bps <= 300) : []; } catch { return []; }
+}
+
+export function markupBpsFor(kind: TransferKindT, amountUsd: number, tiers = MARKUP_TIERS, corridor?: { origin: string; dest: string }, overrides = corridorMarkups()): number {
+  if (corridor) {
+    const m = overrides
+      .filter(o => (!o.from || o.from === "*" || o.from === corridor.origin) && (!o.to || o.to === "*" || o.to === corridor.dest) && (!o.kind || o.kind === "*" || o.kind === kind))
+      .sort((a, b) => score(b) - score(a))[0];
+    if (m) return Math.max(m.bps, MIN_MARGIN_BPS);
+  }
   const list = tiers[kind];
   const tier = list.find(t => amountUsd < t.upToUsd) ?? list[list.length - 1];
   return Math.max(tier.bps, MIN_MARGIN_BPS);
 }
+
+const score = (o: CorridorMarkup) => (o.from && o.from !== "*" ? 2 : 0) + (o.to && o.to !== "*" ? 2 : 0) + (o.kind && o.kind !== "*" ? 1 : 0);
 
 export function toUsd(minor: number, currency: string, rates: RateTable): number {
   const rate = rates[currency];

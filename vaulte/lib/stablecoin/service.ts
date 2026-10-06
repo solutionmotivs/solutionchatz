@@ -1,6 +1,8 @@
 // Orchestration for stablecoin / fiat cross-border transfers.
 // Vaulte never custodies funds: partners receive money, convert, and pay out. This service
 // picks routes, enforces guardrails, keeps the memo ledger, and reacts to partner events.
+import { buildTiming, type Timing } from "@/lib/routing/timing";
+import { corridorTiming } from "@/lib/routing/settlement-metrics";
 import { closedCountries } from "@/lib/routing/corridors";
 import { onInvoicePaid as onEscrowInvoicePaid } from "@/lib/escrow/service";
 import { tierLimits } from "@/lib/kyc/risk";
@@ -166,6 +168,7 @@ export interface BuiltQuote {
   destAmountMinor: number;
   sender: Entity;
   recipient: Entity;
+  timing: Timing;
 }
 
 export async function evaluateQuote(orgId: string, input: QuoteInput, opts: { ignoreGuardrails?: boolean } = {}): Promise<BuiltQuote> {
@@ -202,7 +205,7 @@ export async function evaluateQuote(orgId: string, input: QuoteInput, opts: { ig
   if (!all.length) {
     throw new ServiceError("NO_ROUTE", "No compliant route is available for this corridor, amount and type", 422);
   }
-  const ranked = rankRoutes(all, sourceAmountUsd, prefer);
+  const ranked = rankRoutes(all, sourceAmountUsd, prefer, { destCountry: recipient.country });
 
   // Pick the best route that also passes the guardrails (the guardrails depend on the legs used).
   let chosen: Route | null = null;
@@ -227,7 +230,7 @@ export async function evaluateQuote(orgId: string, input: QuoteInput, opts: { ig
     throw new ServiceError("GUARDRAIL_VIOLATION", "This transfer is not allowed", 422, hard);
   }
 
-  const markupBps = markupBpsFor(input.kind, sourceAmountUsd);
+  const markupBps = markupBpsFor(input.kind, sourceAmountUsd, undefined, { origin: sender.country, dest: recipient.country });
   const breakdown = buildBreakdown({
     route: chosen, kind: input.kind, sourceCurrency: input.sourceCurrency, destCurrency: input.destCurrency,
     sourceAmountMinor: input.sourceAmount, rates, markupBps,
@@ -238,7 +241,9 @@ export async function evaluateQuote(orgId: string, input: QuoteInput, opts: { ig
   if (!margin.ok) throw new ServiceError("PRICING_REJECTED", margin.reason ?? "Quote rejected", 422);
 
   const destAmountMinor = Math.floor(fromUsd(breakdown.destAmountUsd, input.destCurrency, rates) * 100);
-  return { routes: ranked, chosen, breakdown, guard, sourceAmountUsd, destAmountMinor, sender, recipient };
+  const measured = await corridorTiming(sender.country, recipient.country, sandbox).catch(() => null);
+  const timing = buildTiming(chosen, recipient.country, measured);
+  return { routes: ranked, chosen, breakdown, guard, sourceAmountUsd, destAmountMinor, sender, recipient, timing };
 }
 
 export async function createQuote(orgId: string, input: QuoteInput) {
@@ -266,6 +271,7 @@ export function serializeQuote(row: { id: string; expiresAt: Date; sourceCurrenc
     funding_method: row.fundingMethod,
     route: summariseRoute(built.chosen),
     estimated_arrival_seconds: built.chosen.etaSec,
+    timing: built.timing,
     breakdown: built.breakdown,
     review_flags: built.guard.reviewFlags,
     verification_pending: built.guard.violations.filter(v => VERIFICATION_ONLY.has(v.code)).map(v => v.code),
@@ -442,7 +448,7 @@ async function onFundsConfirmed(transferId: string, opts: { receivedMicro?: bigi
   }
 
   await db.$transaction(async tx => {
-    await tx.transfer.update({ where: { id: t.id }, data: { status: "FUNDS_DETECTED", statusReason: null } });
+    await tx.transfer.update({ where: { id: t.id }, data: { status: "FUNDS_DETECTED", statusReason: null, fundedAt: t.fundedAt ?? new Date() } });
     await bookFundsReceived(tx, finFromTransfer(t));
   });
   await emitWebhookEvent({ organizationId: t.organizationId, event: "transfer.funded", data: { transfer_id: t.id } });

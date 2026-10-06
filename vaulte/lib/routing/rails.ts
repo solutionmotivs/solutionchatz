@@ -25,13 +25,13 @@ export const RAILS: Record<string, RailInfo> = {
   NPP: { label: "NPP / PayID", region: "Australia", etaSec: 30, instant: true, alwaysOn: true },
   FPS_HK: { label: "FPS", region: "Hong Kong", etaSec: 30, instant: true, alwaysOn: true },
   EFT_CA: { label: "EFT", region: "Canada", etaSec: 24 * 3600, instant: false, alwaysOn: false },
-  ZENGIN: { label: "Zengin", region: "Japan", etaSec: 3600, instant: false, alwaysOn: false },
+  ZENGIN: { label: "Zengin", region: "Japan", etaSec: 3600, instant: false, alwaysOn: true },
   UAEFTS: { label: "UAEFTS", region: "UAE", etaSec: 3600, instant: false, alwaysOn: false },
   IPP: { label: "Aani / IPP", region: "UAE", etaSec: 30, instant: true, alwaysOn: true },
   IMPS: { label: "IMPS", region: "India", etaSec: 30, instant: true, alwaysOn: true },
   UPI: { label: "UPI", region: "India", etaSec: 30, instant: true, alwaysOn: true },
-  RTGS: { label: "RTGS", region: "India", etaSec: 1800, instant: false, alwaysOn: false },
-  NEFT: { label: "NEFT", region: "India", etaSec: 2 * 3600, instant: false, alwaysOn: false },
+  RTGS: { label: "RTGS", region: "India", etaSec: 1800, instant: false, alwaysOn: true },
+  NEFT: { label: "NEFT", region: "India", etaSec: 2 * 3600, instant: false, alwaysOn: true },
   ONCHAIN: { label: "On-chain", region: "Global", etaSec: 60, instant: true, alwaysOn: true },
 };
 

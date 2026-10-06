@@ -248,6 +248,11 @@ async function main() {
   check("quote has itemised breakdown and route", q.json?.breakdown?.markupUsd > 0 && q.json?.route?.token === "USDC");
   check("recipient amount is below mid-market (fees applied)", q.json.destination.amount < 500000 * 83.42 * 1.0001);
   check("last leg is an India payout partner", q.json.route.legs.at(-1).kind === "INDIA_PAYOUT");
+  const tm = q.json.timing;
+  check("a quote carries timing: typical and effective seconds, same-day / within-24h flags, a basis, and an honest note", tm && tm.typical_seconds > 0 && tm.effective_seconds >= tm.typical_seconds && typeof tm.same_day === "boolean" && typeof tm.within_24h === "boolean" && ["target", "measured"].includes(tm.basis) && /guarantee|Measured/.test(tm.note), JSON.stringify(tm));
+  const sameDayQ = await api("/api/quotes", { method: "POST", key: A.key, body: { kind: "BUSINESS", sender_entity_id: payer, recipient_entity_id: exporter, source_currency: "USD", dest_currency: "INR", source_amount: 500000, funding_method: "STABLECOIN", token: "USDC", prefer: "same_day" } });
+  check("prefer: same_day is accepted and returns timing", sameDayQ.status === 201 && !!sameDayQ.json.timing, JSON.stringify(sameDayQ.json?.error));
+  check("an unknown preference is refused", (await api("/api/quotes", { method: "POST", key: A.key, body: { kind: "BUSINESS", sender_entity_id: payer, recipient_entity_id: exporter, source_currency: "USD", dest_currency: "INR", source_amount: 500000, funding_method: "STABLECOIN", prefer: "instant_always" } })).status === 400);
 
   const noDocs = await api("/api/stablecoin/payins", { method: "POST", key: A.key, body: { quote_id: q.json.id } });
   check("India business transfer without invoice/purpose code is refused", noDocs.status === 422 && JSON.stringify(noDocs.json).includes("INVOICE_REQUIRED"), JSON.stringify(noDocs.json));
@@ -1270,6 +1275,20 @@ async function main() {
     }
   }
   server.close();
+
+  console.log("== Settlement timing (measured, not promised)");
+  const doneT = await db.transfer.findMany({ where: { status: "COMPLETED", fundedAt: { not: null } }, take: 3 });
+  check("completed transfers record when the partner confirmed funds (start of the measured clock)", doneT.length > 0 && doneT.every(x => x.completedAt >= x.fundedAt), String(doneT.length));
+  const stats = await api("/api/admin/settlement-stats", { jar: staffJar });
+  check("staff see measured settlement times per corridor", stats.status === 200 && stats.json.corridors.length > 0 && stats.json.corridors.every(c => c.samples > 0 && c.p90_seconds >= c.p50_seconds), JSON.stringify(stats.json).slice(0, 200));
+  check("customers cannot read settlement stats", [401, 403].includes((await api("/api/admin/settlement-stats", { jar: A.jar })).status));
+  const slowT = doneT[0];
+  await db.transfer.update({ where: { id: slowT.id }, data: { status: "PAYING_OUT", fundedAt: new Date(Date.now() - 48 * 3600_000) } });
+  const wd0 = await fetch(`${BASE}/api/internal/transfers/watchdog`, { method: "POST" });
+  const wd1 = await (await fetch(`${BASE}/api/internal/transfers/watchdog`, { method: "POST", headers: { "x-cron-secret": process.env.CRON_SECRET } })).json();
+  const wd2 = await (await fetch(`${BASE}/api/internal/transfers/watchdog`, { method: "POST", headers: { "x-cron-secret": process.env.CRON_SECRET } })).json();
+  check("the watchdog needs the cron secret, flags a transfer in flight past twice its quoted time once, and does not flag it again", wd0.status === 401 && wd1.flagged?.includes(slowT.id) && !wd2.flagged?.includes(slowT.id) && (await db.auditLog.count({ where: { action: "transfer.slow", resourceId: slowT.id } })) === 1, JSON.stringify([wd0.status, wd1, wd2]));
+  await db.transfer.update({ where: { id: slowT.id }, data: { status: "COMPLETED", fundedAt: slowT.fundedAt } });
 
   console.log("== Partner webhook endpoint");
   const body = JSON.stringify({ id: `evt_${uniq}`, type: "deposit.detected", data: { address: "nope" } });

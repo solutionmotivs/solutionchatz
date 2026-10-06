@@ -15,7 +15,7 @@ const Schema = z.object({
   source_amount: z.number().int().positive(),
   funding_method: z.enum(["STABLECOIN", "FIAT_LOCAL"]),
   token: z.enum(["USDC", "USDT"]).optional(),
-  prefer: z.enum(["cheapest", "fastest", "balanced"]).optional(),
+  prefer: z.enum(["cheapest", "fastest", "balanced", "same_day"]).optional(),
 });
 
 export async function POST(req: NextRequest) {

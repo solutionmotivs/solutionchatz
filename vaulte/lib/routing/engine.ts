@@ -1,6 +1,7 @@
 // Route engine: picks the cheapest / fastest combination of partner legs for a transfer.
 // Vaulte owns no rail; a "route" is an ordered set of partner legs with a firm price.
 import type { Chain, Leg, Preference, Route, Token, TransferKindT, FundingMethodT } from "@/lib/stablecoin/types";
+import { effectiveEtaSec, landsSameDay } from "./timing";
 import { CHAIN_ETA_SEC, CHAIN_FEE_USD, JURISDICTION_TOKEN_RULES, MOCK_LEGS } from "./catalog";
 
 export interface RouteRequest {
@@ -56,11 +57,19 @@ export function routeCostUsd(route: Route, amountUsd: number): number {
   return (amountUsd * (route.spreadBps + route.feeBps)) / 10_000 + route.fixedFeeUsd;
 }
 
-export function scoreRoute(route: Route, amountUsd: number, prefer: Preference): number {
+export interface RankContext { destCountry?: string; now?: number }
+
+export function scoreRoute(route: Route, amountUsd: number, prefer: Preference, ctx: RankContext = {}): number {
   const costBps = (routeCostUsd(route, amountUsd) / amountUsd) * 10_000;
   const hours = route.etaSec / 3600;
   if (prefer === "cheapest") return costBps * 1_000_000 + route.etaSec;
   if (prefer === "fastest") return route.etaSec * 1_000_000 + costBps;
+  if (prefer === "same_day") {
+    // Routes that land before the end of today (destination calendar day, after waiting for bank cut-offs) come first, cheapest among them; the rest follow by arrival time.
+    const eff = effectiveEtaSec(route, ctx.now ?? Date.now()).seconds;
+    const today = ctx.destCountry ? landsSameDay(eff, ctx.destCountry, ctx.now ?? Date.now()) : eff <= 24 * 3600;
+    return today ? costBps * 1000 + eff / 1000 : 1e12 + eff * 1_000_000 + costBps;
+  }
   return costBps + hours * 5; // balanced: 5 bps per hour of delay
 }
 
@@ -161,8 +170,8 @@ function finalise(routes: Route[], req: RouteRequest): Route[] {
   return kept;
 }
 
-export function rankRoutes(routes: Route[], amountUsd: number, prefer: Preference): Route[] {
-  return [...routes].sort((a, b) => scoreRoute(a, amountUsd, prefer) - scoreRoute(b, amountUsd, prefer));
+export function rankRoutes(routes: Route[], amountUsd: number, prefer: Preference, ctx: RankContext = {}): Route[] {
+  return [...routes].sort((a, b) => scoreRoute(a, amountUsd, prefer, ctx) - scoreRoute(b, amountUsd, prefer, ctx));
 }
 
 /** Failover: next-best route that avoids the partners that just failed. */

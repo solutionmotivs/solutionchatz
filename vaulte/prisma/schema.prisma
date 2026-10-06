@@ -624,6 +624,8 @@ model Transfer {
   efiraRef       String?
   description    String?
   completedAt    DateTime?
+  /// When the partner confirmed the sender's money (start of the settlement clock we measure)
+  fundedAt       DateTime?
 
   organizationId    String
   organization      Organization @relation(fields: [organizationId], references: [id])
