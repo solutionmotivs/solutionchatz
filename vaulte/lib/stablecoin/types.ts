@@ -98,6 +98,6 @@ export interface FxSummary {
   spread_bps: number;
   rail: string;
   valid_until: string;
-  compared: { provider: string; rate: number; spread_bps: number; fee_usd: number; rail: string; eta_seconds: number; chosen: boolean }[];
+  compared: { provider: string; rate: number; spread_bps: number; fee_usd: number; rail: string; eta_seconds: number; cut_off_at?: string; chosen: boolean }[];
   errors: { provider: string; error: string }[];
 }

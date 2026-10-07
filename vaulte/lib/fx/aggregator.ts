@@ -95,7 +95,7 @@ export function summariseFx(chosenLeg: Leg | undefined, live: LiveLegs, amountUs
   if (!l || !chosenLeg) return undefined;
   return {
     provider: l.provider, rate: l.rate, mid_rate: l.midRate, spread_bps: spreadBpsVsMid(l.rate, l.midRate), rail: chosenLeg.rails[0], valid_until: l.validUntil,
-    compared: live.quotes.map(q => ({ provider: q.provider, rate: q.rate, spread_bps: q.spreadBps, fee_usd: Math.round((q.fixedFeeUsd + (amountUsd * q.feeBps) / 10_000) * 100) / 100, rail: q.rail, eta_seconds: q.etaSec, chosen: q.provider === l.provider }))
+    compared: live.quotes.map(q => ({ provider: q.provider, rate: q.rate, spread_bps: q.spreadBps, fee_usd: Math.round((q.fixedFeeUsd + (amountUsd * q.feeBps) / 10_000) * 100) / 100, rail: q.rail, eta_seconds: q.etaSec, ...(q.cutOffAt ? { cut_off_at: q.cutOffAt } : {}), chosen: q.provider === l.provider }))
       .sort((x, y) => (x.spread_bps * amountUsd / 10_000 + x.fee_usd) - (y.spread_bps * amountUsd / 10_000 + y.fee_usd)),
     errors: live.errors,
   };

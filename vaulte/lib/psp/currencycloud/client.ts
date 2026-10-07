@@ -49,6 +49,8 @@ export class CurrencycloudClient {
   createPayment(a: { requestId: string; currency: string; beneficiaryId: string; amount: string; reason: string; reference: string; conversionId?: string; priority?: boolean }) {
     return this.call<{ id: string; status?: string; short_reference?: string }>("POST", "/v2/payments/create", { currency: a.currency, beneficiary_id: a.beneficiaryId, amount: a.amount, reason: a.reason, reference: a.reference, payment_type: a.priority ? "priority" : "regular", conversion_id: a.conversionId, unique_request_id: a.requestId });
   }
+  /** Currencies this account can trade (the demo and each live account differ; do not assume a fixed list). */
+  currencies() { return this.call<{ currencies?: { code: string }[] }>("GET", "/v2/reference/currencies"); }
   fundingAccount(currency: string) { return this.call<{ funding_accounts?: { account_number?: string; account_number_type?: string; routing_code?: string; routing_code_type?: string; account_holder_name?: string; bank_name?: string; currency?: string; id?: string }[] }>("GET", "/v2/funding_accounts/find", { currency }); }
 }
 

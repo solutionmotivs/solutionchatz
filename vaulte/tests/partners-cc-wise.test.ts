@@ -59,6 +59,16 @@ describe("Currencycloud adapter (contract test against a stub)", () => {
     expect(q.rate).toBeCloseTo(0.9, 6); expect(q.provider).toBe("currencycloud"); expect(q.rail).toBeTruthy();
     expect(new CurrencycloudFxProvider(mk()).supports("USD", "INR")).toBe(false);
   });
+  it("the provider learns what the account can trade and refuses other pairs without calling the rate API", async () => {
+    const fake = { currencies: async () => ({ currencies: [{ code: "USD" }, { code: "EUR" }, { code: "INR" }] }), detailedRate: async () => { throw new Error("must not be called"); } } as any;
+    const p = new CurrencycloudFxProvider(fake);
+    await expect(p.quote({ sourceCurrency: "USD", destCurrency: "CNH", sourceAmountMinor: 10_000, destCountry: "HK" })).rejects.toThrow(/cannot trade USD\/CNH/);
+    expect(p.supports("USD", "EUR")).toBe(true); expect(p.supports("USD", "CNH")).toBe(false); expect(p.supports("USD", "INR")).toBe(false); // INR is always served by an Indian partner
+  });
+  it("the quote carries the provider's cut-off time", async () => {
+    const fake = { currencies: async () => ({ currencies: [] }), detailedRate: async () => ({ client_rate: "0.9", client_buy_amount: "90.00", client_sell_amount: "100.00", settlement_cut_off_time: "2026-10-09T13:30:00Z" }) } as any;
+    expect((await new CurrencycloudFxProvider(fake).quote({ sourceCurrency: "USD", destCurrency: "EUR", sourceAmountMinor: 10_000, destCountry: "DE" })).cutOffAt).toBe("2026-10-09T13:30:00Z");
+  });
   it("payout = beneficiary + buy-side conversion + payment, with deterministic request ids", async () => {
     const p = new CurrencycloudPartner(mk(), "sek");
     const before = s.seen.length;

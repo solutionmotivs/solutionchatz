@@ -24,6 +24,8 @@ export interface FxQuote {
   maxUsd: number;
   jurisdiction: string;
   country: string;
+  /** Provider's next trade cut-off for this pair (ISO time), when it publishes one. Trades after it settle later. */
+  cutOffAt?: string;
 }
 
 export interface FxProvider {
