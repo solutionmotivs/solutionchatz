@@ -42,3 +42,6 @@ Thumbs.db
 *.tsbuildinfo
 next-env.d.ts
 .data/
+
+# Partner credentials (local only)
+.env.partners.local

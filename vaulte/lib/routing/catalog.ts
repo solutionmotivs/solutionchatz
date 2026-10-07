@@ -94,13 +94,13 @@ const PRIMARY_LEGS: Leg[] = [
   // ── India: inbound payout (business: PA-CB export partner, personal: MTSS partner) ──
   {
     id: "in.payout.pacb", partner: "mock_in_pacb", kind: "INDIA_PAYOUT", country: "IN", jurisdiction: "IN",
-    destCurrency: "INR", acceptsFiat: ["USD", "AED", "EUR", "GBP", "SGD", "CAD", "AUD", "JPY", "HKD", "CNH"], rails: ["IMPS", "RTGS"], tokens: [], chains: [],
+    destCurrency: "INR", acceptsFiat: ["USD", "AED", "EUR", "GBP", "SGD", "CAD", "AUD", "JPY", "HKD", "CNH", "SAR"], rails: ["IMPS", "RTGS"], tokens: [], chains: [],
     spreadBps: 12, feeBps: 10, fixedFeeUsd: 0.5, etaSec: 4 * 3600, minUsd: 10, maxUsd: 29_000,
     kinds: ["BUSINESS"], indiaAuth: "PA_CB_E",
   },
   {
     id: "in.payout.mtss", partner: "mock_in_mtss", kind: "INDIA_PAYOUT", country: "IN", jurisdiction: "IN",
-    destCurrency: "INR", acceptsFiat: ["USD", "AED", "EUR", "GBP", "SGD", "CAD", "AUD", "JPY", "HKD", "CNH"], rails: ["IMPS", "UPI"], tokens: [], chains: [],
+    destCurrency: "INR", acceptsFiat: ["USD", "AED", "EUR", "GBP", "SGD", "CAD", "AUD", "JPY", "HKD", "CNH", "SAR"], rails: ["IMPS", "UPI"], tokens: [], chains: [],
     spreadBps: 15, feeBps: 15, fixedFeeUsd: 0.5, etaSec: 15 * 60, minUsd: 5, maxUsd: 2_500,
     kinds: ["PERSONAL"], indiaAuth: "MTSS",
   },

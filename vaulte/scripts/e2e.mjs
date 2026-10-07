@@ -1311,7 +1311,7 @@ async function main() {
   const usdtJp = await quoteFor(usSender, jpOut, "USD", "JPY", 100000, "STABLECOIN", "USDT");
   check("USDT is refused where the market rules do not allow it (Japan, Canada, EU), with a clear error", usdtJp.status === 422 && usdtJp.json.error.code === "NO_ROUTE", JSON.stringify(usdtJp.json?.error));
   check("USDT works where a partner market allows it (Australia)", (await quoteFor(usSender, await mk("Recv AUD 2", "AU", "AUD"), "USD", "AUD", 100000, "STABLECOIN", "USDT")).status === 201);
-  for (const [cc, ccy, minor] of [["AE", "AED", 367250], ["DE", "EUR", 92000], ["GB", "GBP", 78500], ["CA", "CAD", 136000], ["AU", "AUD", 152000], ["JP", "JPY", 150000], ["HK", "HKD", 780000], ["HK", "CNH", 713000]]) {
+  for (const [cc, ccy, minor] of [["AE", "AED", 367250], ["DE", "EUR", 92000], ["GB", "GBP", 78500], ["CA", "CAD", 136000], ["AU", "AUD", 152000], ["JP", "JPY", 150000], ["HK", "HKD", 780000], ["HK", "CNH", 713000], ["SA", "SAR", 375000]]) {
     const sid = await mk(`Pay ${ccy}`, cc, ccy);
     const qf = await quoteFor(sid, inRecv, ccy, "INR", minor, "FIAT_LOCAL");
     check(`${ccy} (about USD 1,000) to INR: fiat in, rupees land in India through an authorised partner`, qf.status === 201 && qf.json.route.legs.at(-1).kind === "INDIA_PAYOUT" && qf.json.source.amount === minor && qf.json.breakdown.sourceAmountUsd > 800 && qf.json.breakdown.sourceAmountUsd < 1250, JSON.stringify(qf.json?.error ?? qf.json?.breakdown?.sourceAmountUsd));
