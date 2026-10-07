@@ -90,6 +90,7 @@ export default function LandingPage() {
             </p>
             <div className="flex gap-4">
               <Link href="/register" className="btn-primary">Try the Sandbox</Link>
+              <Link href="/pilot" className="btn-ghost">Join the pilot</Link>
               <Link href="/login" className="btn-ghost">Sign In</Link>
             </div>
             <div className="flex gap-10 mt-16 pt-10 border-t border-ink/10">

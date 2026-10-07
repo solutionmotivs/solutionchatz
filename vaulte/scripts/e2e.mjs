@@ -1450,6 +1450,22 @@ async function main() {
   const jobPoll = await (await jobPost("name=certificate-poll&force=1")).json();
   check("the certificate poll and the watchdog run through the same lease path", jobPoll.status === "ran" && (await (await jobPost("name=slow-transfers&force=1")).json()).status === "ran", JSON.stringify(jobPoll));
 
+  console.log("== Pilot leads (public interest form, staff pipeline)");
+  const leadBody = { name: "Priya Shah", email: `lead-${uniq}@example.com`, company: "Shah Exports", country: "in", corridor: "US>IN", volume_band: "10k-100k", use_case: "Receive USD from US buyers", consent: true };
+  const lead = (b) => fetch(`${BASE}/api/leads`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": `10.9.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}` }, body: JSON.stringify(b) });
+  const l1 = await lead(leadBody);
+  check("the public form stores a lead and promises no live money in the acknowledgement", l1.status === 201 && (await db.pilotLead.findUnique({ where: { email: leadBody.email } }))?.country === "IN" && (await db.emailLog.count({ where: { to: leadBody.email, subject: "Your Vaulte pilot request" } })) >= 1);
+  const l2 = await lead({ ...leadBody, company: "Shah Exports Pvt Ltd" });
+  check("the same address again updates its entry and answers the same way (nothing about who is registered leaks)", l2.status === 201 && (await db.pilotLead.count({ where: { email: leadBody.email } })) === 1 && (await db.pilotLead.findUnique({ where: { email: leadBody.email } })).company === "Shah Exports Pvt Ltd");
+  check("consent is required, a filled honeypot is refused, a bad country is refused", (await lead({ ...leadBody, email: `x1-${uniq}@example.com`, consent: false })).status === 400 && (await lead({ ...leadBody, email: `x2-${uniq}@example.com`, website: "http://spam.example" })).status === 400 && (await lead({ ...leadBody, email: `x3-${uniq}@example.com`, country: "INDIA" })).status === 400);
+  const leadsList = await api("/api/admin/leads?status=NEW", { jar: staffJar });
+  const theLead = leadsList.json?.data?.find(x => x.email === leadBody.email);
+  check("staff see the lead in the NEW column; customers cannot read leads", leadsList.status === 200 && !!theLead && [401, 403].includes((await api("/api/admin/leads", { jar: A.jar })).status), JSON.stringify(leadsList.json).slice(0, 160));
+  const moved = await fetch(`${BASE}/api/admin/leads`, { method: "PATCH", headers: { "content-type": "application/json", Cookie: staffJar.cookie }, body: JSON.stringify({ id: theLead.id, status: "CONTACTED", note: "Called, wants US>IN pilot" }) });
+  check("staff can move it through the pipeline with a note", moved.status === 200 && (await db.pilotLead.findUnique({ where: { id: theLead.id } })).status === "CONTACTED");
+  const pilotPage = await fetch(`${BASE}/pilot`);
+  check("the pilot page renders for the public and says test mode", pilotPage.status === 200 && (await pilotPage.text()).includes("test mode"));
+
   console.log("== Partner webhook endpoint");
   const body = JSON.stringify({ id: `evt_${uniq}`, type: "deposit.detected", data: { address: "nope" } });
   const sigOk = createHmac("sha256", MOCK_SECRET).update(body).digest("hex");
