@@ -27,3 +27,17 @@ Bridge (Stripe), BVNK, Transak, Ramp, Banxa, MoonPay, Bitstamp, Coinbase: probe 
 ## Speed
 
 Typical times are in the catalogue and every quote's `timing` block says whether the figure is a target or measured on completed transfers. On-chain confirmation is seconds to minutes; fiat rails range from seconds (SEPA Instant, FedNow, Faster Payments, NPP, FPS, IMPS/UPI) to a business day (SWIFT, ACH, CIPS windows). Compliance holds add time. Do not promise "seconds" or "under 24 hours"; publish the measured numbers.
+
+## Circle Payments Network (CPN): the product that actually lands local fiat (checked 2026-10-07)
+
+Circle Mint (above) cannot pay INR: its payout currencies are USD, EUR, MXN, SGD and BRL, and only to bank accounts registered on your own account. **CPN is the product built for "stablecoin in, local fiat out in another country".** From Circle's public pages:
+
+- Roles: an **Originating Financial Institution (OFI)** sends USDC; a **Beneficiary Financial Institution (BFI)** converts it and pays local fiat to the receiver.
+- Live payout corridors named by Circle: **India INR** (Saber: IMPS and RTGS near-instant, NEFT typically under 2 hours), **UAE AED** (LuLu Financial Holdings, FTS), **Singapore SGD** (Tazapay, FAST), **EU EUR** (Saber, SEPA), **US USD** (Tazapay, Fedwire), **Philippines PHP** (Coins.ph).
+- API flow: request quotes from several BFIs, accept one, encrypt the travel-rule and beneficiary data, sign the USDC transfer, then the BFI settles in fiat; track by API and webhook.
+- An OFI needs USDC liquidity, a custody or signing solution, and its own KYC/AML. Circle's pages do not say what licence an OFI needs: **that is the question to put to Circle and to counsel.**
+- **CPN Managed Payments** is the variant where Circle holds the assets, the licences and the compliance, and the partner stays in fiat. It is **by Circle's invitation and a formal agreement**; the public docs give no sandbox details.
+
+What this means for Vaulte: the USDC-to-INR (and AED, SGD, EUR, USD) landing can be one CPN call instead of a chain of ramp + FX + India payout partners. It becomes a **leg in the route engine** next to the others, so the router can compare it with Cashfree/Razorpay-based routes on price and measured time. No adapter is written yet because there is no sandbox access: ask Circle for CPN (ideally Managed Payments) access and say "Circle CPN ka sandbox mil gaya"; I will then read its API reference and build the adapter.
+
+Questions for Circle: (1) Can Vaulte originate through Managed Payments without holding its own licence, in which countries? (2) Sandbox and webhook signing? (3) Fees and FX spread per corridor? (4) Does the INR payout come with an eFIRA, and who issues it? (5) Per-transfer limits and the purpose-code/invoice data Saber needs for India.
