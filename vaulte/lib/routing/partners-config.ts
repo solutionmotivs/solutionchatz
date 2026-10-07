@@ -21,8 +21,23 @@ const LegSchema = z.object({
 
 let cached: Leg[] | undefined;
 
+/**
+ * Structural rule: nothing on the Indian side may touch crypto. A leg in the Indian jurisdiction is fiat only (no tokens, no chains) and can only
+ * be an India payout or an India-origin fiat leg. This keeps every Indian party (and every Indian rupee payout) outside any virtual-digital-asset
+ * transfer: the stablecoin is received and converted by a licensed partner offshore, and India only ever sees a fiat remittance.
+ */
+export function assertIndiaFiatOnly(legs: Leg[]): void {
+  for (const l of legs) {
+    if (l.jurisdiction !== "IN" && l.country !== "IN") continue;
+    if (l.tokens.length || l.chains.length || ["ACCEPT_TOKEN", "ONRAMP_FIAT", "OFFRAMP"].includes(l.kind)) {
+      throw new Error(`leg ${l.id}: legs in India must be fiat only (no stablecoin tokens, chains, on-ramp or off-ramp)`);
+    }
+  }
+}
+
 export function parseCatalog(json: string): Leg[] {
   const arr = z.array(LegSchema).parse(JSON.parse(json));
+  assertIndiaFiatOnly(arr as Leg[]);
   const ids = new Set<string>();
   for (const l of arr) { if (ids.has(l.id)) throw new Error(`duplicate leg id ${l.id}`); ids.add(l.id); }
   return arr as Leg[];
