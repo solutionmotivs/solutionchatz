@@ -45,3 +45,4 @@ next-env.d.ts
 
 # Partner credentials (local only)
 .env.partners.local
+.env.hostinger.local
