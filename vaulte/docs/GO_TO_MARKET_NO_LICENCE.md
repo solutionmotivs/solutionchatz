@@ -1,5 +1,7 @@
 # Starting without a licence: what to do now, what never to say or do
 
+> **Update (Round 3).** This note describes the test-mode start. The longer-term target is not "pilot only": it is the **licensed-principal (agent) model** in `AGENT_MODEL_MEMO.md`, where a licensed partner is the provider of record and holds the money, and Vaulte runs onboarding, orchestration and the customer experience. The pricing model is in `PRICING.md`. Nothing here changes the rule that no live money moves until counsel clears a country and the partner has approved the customer.
+
 Decision (yours): **no licence for now.** Goal: a good start and gathering clients. This note keeps that honest and safe. Not legal advice: counsel confirms it for each country before any real money.
 
 ## What Vaulte is in this phase

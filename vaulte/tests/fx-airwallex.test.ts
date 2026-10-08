@@ -224,7 +224,7 @@ describe("test mode and live mode never mix", () => {
     expect(() => assertRouteMode(realRoute, false)).not.toThrow();
   });
   it("the live catalogue rejects mock partners, bad numbers and duplicate ids", () => {
-    const leg = { id: "awx.direct.usdeur", partner: "airwallex", kind: "DIRECT", country: "AU", jurisdiction: "AU", srcCurrency: "USD", destCurrency: "EUR", rails: ["SWIFT"], tokens: [], chains: [], spreadBps: 20, feeBps: 0, fixedFeeUsd: 5, etaSec: 86400, minUsd: 10, maxUsd: 100000, kinds: ["BUSINESS"] };
+    const leg = { id: "awx.direct.usdeur", partner: "airwallex", kind: "DIRECT", country: "AU", jurisdiction: "AU", srcCurrency: "USD", destCurrency: "EUR", rails: ["SWIFT"], tokens: [], chains: [], spreadBps: 20, feeBps: 0, fixedFeeUsd: 5, etaSec: 86400, minUsd: 10, maxUsd: 100000, kinds: ["BUSINESS"], structure: { principal: "airwallex", fundsHeldBy: "PARTNER", accountHolder: "CUSTOMER_SUBACCOUNT", vaulteRole: "AGENT", agreementRef: "AWX-TEST-1" } };
     expect(parseCatalog(JSON.stringify([leg]))).toHaveLength(1);
     expect(() => parseCatalog(JSON.stringify([{ ...leg, partner: "mock_us" }]))).toThrow(/mock/);
     expect(() => parseCatalog(JSON.stringify([{ ...leg, spreadBps: 5000 }]))).toThrow();

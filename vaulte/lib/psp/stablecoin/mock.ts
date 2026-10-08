@@ -2,7 +2,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 import type {
   DepositInstruction, FiatFundingInstruction, PartnerDocument, PayoutRequest, PayoutResult, StablecoinPartner,
-  VirtualAccountRequest, VirtualAccountResult,
+  VirtualAccountRequest, VirtualAccountResult, CustomerPackage, PartnerCustomerResult,
 } from "./partner";
 
 export function mockWebhookSecret(): string {
@@ -20,6 +20,14 @@ const rid = (n = 8) => randomBytes(n).toString("hex");
 
 export class MockPartner implements StablecoinPartner {
   constructor(readonly id: string) {}
+
+  /** Sandbox partner: accepts every customer Vaulte has already verified, so the onboarding flow is visible end to end in test mode. */
+  async submitCustomer(pkg: CustomerPackage): Promise<PartnerCustomerResult> {
+    return { partnerRef: `mock_cust_${pkg.organizationId.slice(-6)}_${rid(3)}`, status: "APPROVED", note: "Sandbox partner: auto-approved" };
+  }
+  async getCustomerStatus(partnerRef: string): Promise<PartnerCustomerResult> {
+    return { partnerRef, status: "APPROVED", note: "Sandbox partner: auto-approved" };
+  }
 
   async createDeposit(opts: { transferId: string; token: DepositInstruction["token"]; chain: DepositInstruction["chain"]; expectedAmountMicro: bigint }): Promise<DepositInstruction> {
     return {

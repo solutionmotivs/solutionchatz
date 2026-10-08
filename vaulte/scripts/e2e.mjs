@@ -1466,6 +1466,35 @@ async function main() {
   const pilotPage = await fetch(`${BASE}/pilot`);
   check("the pilot page renders for the public and says test mode", pilotPage.status === 200 && (await pilotPage.text()).includes("test mode"));
 
+  console.log("== Licensed-partner structure, delegated onboarding, public quote");
+  const estIp = () => `10.8.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`;
+  const estPost = (b) => fetch(`${BASE}/api/public/quote`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": estIp() }, body: JSON.stringify(b) });
+  const estBody = { from_country: "US", to_country: "IN", from_currency: "USD", to_currency: "INR", amount: 5000, kind: "BUSINESS" };
+  const estR = await estPost(estBody); const estJ = await estR.json();
+  const estO = estJ.options?.[0];
+  check("anyone can get an estimate without an account: test mode, the full fee split, timing and the India certificate note", estR.status === 200 && estJ.mode === "test" && estJ.options.length >= 1 && Math.abs(estO.fees.partner_cost_usd + estO.fees.vaulte_fee_usd - estO.fees.total_usd) < 0.02 && estO.fees.collection === "PARTNER_SHARE" && estO.they_receive.currency === "INR" && ["measured", "target"].includes(estO.timing.basis) && /does not issue certificates/.test(estJ.certificate), JSON.stringify(estJ).slice(0, 300));
+  check("the estimate lists distinct options (lowest cost, fastest, lands today) with different routes", new Set(estJ.options.map(o => JSON.stringify(o.route.legs))).size === estJ.options.length);
+  const estStable = await (await estPost({ ...estBody, funding: "STABLECOIN", token: "USDC" })).json();
+  check("a USDC estimate to India ends in an INR payout by an authorised partner and never in a crypto leg in India", estStable.options?.length >= 1 && estStable.options.every(o => o.route.legs.filter(l => l.country === "IN").every(l => l.kind === "INDIA_PAYOUT")), JSON.stringify(estStable).slice(0, 200));
+  const estRub = await estPost({ ...estBody, to_currency: "RUB", to_country: "RU" });
+  check("closed currencies and bad input are refused", estRub.status === 422 && (await estRub.json()).error.code === "CURRENCY_CLOSED" && (await estPost({ ...estBody, amount: -5 })).status === 400 && (await estPost({ ...estBody, from_country: "USA" })).status === 400);
+  const quotePage = await fetch(`${BASE}/quote`);
+  check("the public compare page renders and calls itself an estimate", quotePage.status === 200 && /estimate/i.test(await quotePage.text()));
+  const board = await (await fetch(`${BASE}/api/public/scoreboard`)).json();
+  check("the scoreboard publishes only live corridors with enough measured transfers (simulated test transfers never count)", Array.isArray(board.corridors) && board.corridors.every(c => c.samples >= board.min_samples && c.mode === "live") && /not promised/.test(board.note));
+  const defaultQ = await api("/api/quotes", { method: "POST", key: A.key, body: { kind: "BUSINESS", sender_entity_id: payer, recipient_entity_id: exporter, source_currency: "USD", dest_currency: "INR", source_amount: 500000, funding_method: "STABLECOIN", token: "USDC" } });
+  check("a business quote without a preference ranks for same-day, shows the fee split and where the customer stands with each partner", defaultQ.status === 201 && defaultQ.json.fees?.collection === "PARTNER_SHARE" && Math.abs(defaultQ.json.fees.partner_cost_usd + defaultQ.json.fees.vaulte_fee_usd - defaultQ.json.fees.total_usd) < 0.02 && Array.isArray(defaultQ.json.partner_onboarding) && defaultQ.json.partner_onboarding.length >= 1, JSON.stringify(defaultQ.json).slice(0, 300));
+  const ptc = await api("/api/partner-customers", { method: "POST", jar: A.jar, body: { partner: "mock_us" } });
+  check("the customer's verified details go to the sandbox partner, which approves them", ptc.status === 201 && ptc.json.status === "APPROVED" && ptc.json.mode === "test", JSON.stringify(ptc.json));
+  const pcAgain = await api("/api/partner-customers", { method: "POST", jar: A.jar, body: { partner: "mock_us" } });
+  check("starting it again is idempotent, and an unknown partner is refused", pcAgain.status === 201 && pcAgain.json.id === ptc.json.id && (await api("/api/partner-customers", { method: "POST", jar: A.jar, body: { partner: "no_such_partner" } })).status === 404);
+  check("the customer sees their partner onboarding", (await api("/api/partner-customers", { jar: A.jar })).json.data.some(r => r.partner === "mock_us" && r.status === "APPROVED"));
+  const ptStaff2 = await api("/api/admin/partner-customers?status=APPROVED", { jar: staffJar });
+  check("staff list partner onboarding; customers cannot", ptStaff2.status === 200 && ptStaff2.json.data.some(r => r.id === ptc.json.id) && [401, 403].includes((await api("/api/admin/partner-customers", { jar: A.jar })).status));
+  const ptSet = await fetch(`${BASE}/api/admin/partner-customers`, { method: "PATCH", headers: { "content-type": "application/json", Cookie: staffJar.cookie }, body: JSON.stringify({ id: ptc.json.id, status: "NEEDS_INFO", note: "Partner asked for the latest bank statement" }) });
+  check("staff record the partner's decision, which is audited", ptSet.status === 200 && (await db.partnerCustomer.findUnique({ where: { id: ptc.json.id } })).status === "NEEDS_INFO" && (await db.auditLog.count({ where: { resourceId: ptc.json.id, action: "partner_customer.set_status" } })) === 1);
+  await db.partnerCustomer.update({ where: { id: ptc.json.id }, data: { status: "APPROVED" } });
+
   console.log("== Partner webhook endpoint");
   const body = JSON.stringify({ id: `evt_${uniq}`, type: "deposit.detected", data: { address: "nope" } });
   const sigOk = createHmac("sha256", MOCK_SECRET).update(body).digest("hex");

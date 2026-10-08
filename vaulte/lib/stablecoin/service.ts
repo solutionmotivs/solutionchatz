@@ -18,10 +18,13 @@ import { screenAndFlagEntity } from "@/lib/sanctions/entities";
 import {
   calendarYearStart, evaluateTransfer, financialYearStart, type GuardContext, type GuardResult,
 } from "@/lib/guardrails";
+import { feeSplit } from "@/lib/pricing/split";
 import { buildBreakdown, fromUsd, markupBpsFor, toUsd, validateMargin } from "@/lib/pricing";
 import { buildLiveLegs, summariseFx, type LiveLegs } from "@/lib/fx/aggregator";
 import { MOCK_LEGS } from "@/lib/routing/catalog";
 import { realLegs } from "@/lib/routing/partners-config";
+import { applyAgentGate, agentRegistration, routeUsesVaulteAsAgent } from "@/lib/routing/structure";
+import { onboardingFor, requireApprovedPartners, type PartnerOnboarding } from "@/lib/partners/customers";
 import { findRoutes, nextRoute, pickAlternates, rankRoutes, routeCostUsd } from "@/lib/routing/engine";
 import { bookFailureReversal, bookFundsReceived, bookPayout, finFromTransfer, rebookRevenue } from "@/lib/ledger/transfers";
 import { getPartner } from "@/lib/psp/stablecoin/registry";
@@ -172,6 +175,8 @@ export interface BuiltQuote {
   sender: Entity;
   recipient: Entity;
   timing: Timing;
+  /** Where the customer stands with each licensed partner on the chosen route. */
+  partnerOnboarding: PartnerOnboarding[];
 }
 
 export async function evaluateQuote(orgId: string, input: QuoteInput, opts: { ignoreGuardrails?: boolean } = {}): Promise<BuiltQuote> {
@@ -193,7 +198,8 @@ export async function evaluateQuote(orgId: string, input: QuoteInput, opts: { ig
     throw new ServiceError("UNSUPPORTED_CURRENCY", e instanceof Error ? e.message : "Rate unavailable", 422);
   });
   const sourceAmountUsd = toUsd(input.sourceAmount, input.sourceCurrency, rates);
-  const prefer = input.prefer ?? "balanced";
+  // Business payers default to the route that lands today when one exists (cheapest among them); everyone can still ask for cheapest/fastest/balanced.
+  const prefer = input.prefer ?? (input.kind === "BUSINESS" ? "same_day" : "balanced");
 
   // Test mode and live mode never mix: unverified accounts get the mock catalogue and sandbox providers only; approved accounts get
   // only the contracted partner catalogue (PARTNER_CATALOG_JSON) and live providers. No mock partner can ever carry live money.
@@ -215,7 +221,12 @@ export async function evaluateQuote(orgId: string, input: QuoteInput, opts: { ig
   if (!all.length) {
     throw new ServiceError("NO_ROUTE", "No compliant route is available for this corridor, amount and type", 422);
   }
-  const ranked = rankRoutes(all, sourceAmountUsd, prefer, { destCountry: recipient.country });
+  // Live only: routes where Vaulte acts as a partner's registered agent stay closed for a country until counsel has confirmed the registration there.
+  const gated = sandbox ? { allowed: all, held: 0 } : applyAgentGate(all, sender.country);
+  if (!gated.allowed.length) {
+    throw new ServiceError("AGENT_REGISTRATION_REQUIRED", `Live payments for customers in ${sender.country} are not open yet: the agent registration with our licensed partner has not been confirmed for that country. Test mode works.`, 422);
+  }
+  const ranked = rankRoutes(gated.allowed, sourceAmountUsd, prefer, { destCountry: recipient.country });
 
   // Pick the best route that also passes the guardrails (the guardrails depend on the legs used).
   let chosen: Route | null = null;
@@ -253,7 +264,8 @@ export async function evaluateQuote(orgId: string, input: QuoteInput, opts: { ig
   const destAmountMinor = Math.floor(fromUsd(breakdown.destAmountUsd, input.destCurrency, rates) * 10 ** expOf(input.destCurrency));
   const measured = await corridorTiming(sender.country, recipient.country, sandbox).catch(() => null);
   const timing = buildTiming(chosen, recipient.country, measured);
-  return { routes: ranked, chosen, breakdown, guard, sourceAmountUsd, destAmountMinor, sender, recipient, timing };
+  const partnerOnboarding = await onboardingFor(orgId, chosen, sandbox).catch(() => []);
+  return { routes: ranked, chosen, breakdown, guard, sourceAmountUsd, destAmountMinor, sender, recipient, timing, partnerOnboarding };
 }
 
 export async function createQuote(orgId: string, input: QuoteInput) {
@@ -264,7 +276,7 @@ export async function createQuote(orgId: string, input: QuoteInput) {
     data: {
       expiresAt, kind: input.kind, senderEntityId: input.senderEntityId, recipientEntityId: input.recipientEntityId, originCountry: q.sender.country, destCountry: q.recipient.country,
       sourceCurrency: input.sourceCurrency, destCurrency: input.destCurrency, sourceAmount: BigInt(input.sourceAmount),
-      destAmount: BigInt(q.destAmountMinor), fundingMethod: input.fundingMethod, prefer: input.prefer ?? "balanced",
+      destAmount: BigInt(q.destAmountMinor), fundingMethod: input.fundingMethod, prefer: input.prefer ?? (input.kind === "BUSINESS" ? "same_day" : "balanced"),
       route: asJson(q.chosen), alternates: asJson(alternates), breakdown: asJson(q.breakdown), organizationId: orgId,
     },
   });
@@ -283,6 +295,8 @@ export function serializeQuote(row: { id: string; expiresAt: Date; sourceCurrenc
     estimated_arrival_seconds: built.chosen.etaSec,
     timing: built.timing,
     breakdown: built.breakdown,
+    fees: feeSplit(built.breakdown),
+    partner_onboarding: built.partnerOnboarding,
     review_flags: built.guard.reviewFlags,
     verification_pending: built.guard.violations.filter(v => VERIFICATION_ONLY.has(v.code)).map(v => v.code),
     documents_required: built.guard.violations.filter(v => DOCUMENT_ONLY.has(v.code)).map(v => v.code),
@@ -329,6 +343,11 @@ export async function createTransferFromQuote(orgId: string, input: CreateTransf
   assertRouteMode(route, sandboxNow);
   const closedNow = closedCountries(sender.country, recipient.country, sandboxNow);
   if (closedNow.length) throw new ServiceError("COUNTRY_NOT_ENABLED", `Live payments are not yet available for ${closedNow.join(", ")}.`, 422);
+  if (!sandboxNow && routeUsesVaulteAsAgent(route) && agentRegistration(sender.country) === "missing") {
+    throw new ServiceError("AGENT_REGISTRATION_REQUIRED", `Live payments for customers in ${sender.country} are not open yet: the agent registration with our licensed partner has not been confirmed for that country.`, 422);
+  }
+  // The licensed partner is the provider of record: it must have approved this customer (Vaulte sends the verified KYB package) before live money moves.
+  await requireApprovedPartners(orgId, route, sandboxNow);
 
   // Screen both parties again at transfer time (lists change daily); a hit flips their status, which the guardrails then enforce.
   await screenAndFlagEntity(sender, "TRANSFER_PARTY");

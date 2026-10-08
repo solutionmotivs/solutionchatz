@@ -4,6 +4,7 @@
 import { readFileSync } from "fs";
 import { z } from "zod";
 import type { Leg } from "@/lib/stablecoin/types";
+import { assertPrincipalStructure, StructureSchema } from "./structure";
 
 const Chain = z.enum(["solana", "base", "ethereum", "tron", "polygon"]);
 const LegSchema = z.object({
@@ -17,6 +18,7 @@ const LegSchema = z.object({
   spreadBps: z.number().min(0).max(500), feeBps: z.number().min(0).max(500), fixedFeeUsd: z.number().min(0).max(1000),
   etaSec: z.number().int().positive(), minUsd: z.number().positive(), maxUsd: z.number().positive(),
   kinds: z.array(z.enum(["BUSINESS", "PERSONAL"])).min(1), indiaAuth: z.enum(["PA_CB_E", "PA_CB_I", "MTSS", "LRS_AD"]).optional(),
+  structure: StructureSchema,
 });
 
 let cached: Leg[] | undefined;
@@ -38,6 +40,7 @@ export function assertIndiaFiatOnly(legs: Leg[]): void {
 export function parseCatalog(json: string): Leg[] {
   const arr = z.array(LegSchema).parse(JSON.parse(json));
   assertIndiaFiatOnly(arr as Leg[]);
+  assertPrincipalStructure(arr as Leg[]);
   const ids = new Set<string>();
   for (const l of arr) { if (ids.has(l.id)) throw new Error(`duplicate leg id ${l.id}`); ids.add(l.id); }
   return arr as Leg[];

@@ -58,6 +58,10 @@ Questions to ask every India partner on the first call (write the answers down):
 4. Sandbox, webhook signing, and idempotency.
 5. Who holds the customer's money between receipt and payout?
 
+## What each partner must declare before it carries live money
+
+Every live leg in `PARTNER_CATALOG_JSON` (and every live FX provider in `PARTNER_STRUCTURE_JSON`) names the **licensed partner as principal and holder of the funds**, who owns the account, Vaulte's role and the signed agreement reference. Without that it does not load. The customer is also onboarded **at the partner** (Vaulte sends its verified KYB package; the partner decides), and live routing waits for `APPROVED`. See `docs/AGENT_MODEL_MEMO.md`; staff record decisions of partners without an API at `/api/admin/partner-customers`.
+
 ## When keys arrive
 
 Give me one provider at a time. For each I will: read its current docs, write the adapter if it does not exist, add a contract test and a smoke check, run it against the sandbox, and report the real FX quote, the rail and the measured time. Then the next.

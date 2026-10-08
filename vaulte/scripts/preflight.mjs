@@ -19,6 +19,22 @@ check("fx", "live FX rate source", !!env.OPENEXCHANGERATES_APP_ID);
 check("kyc", "a real KYC provider (not the mock)", env.KYC_PROVIDER === "sandbox_co_in" && !!env.SANDBOX_CO_IN_API_KEY && env.SANDBOX_CO_IN_ENV === "live", "KYC_PROVIDER=sandbox_co_in, live keys", false);
 check("partners", "live partner catalogue configured", !!(env.PARTNER_CATALOG_JSON || env.PARTNER_CATALOG_FILE), "without it no live route exists (fails closed)");
 check("partners", "Airwallex in live mode with a connected-account id", env.AIRWALLEX_ENV === "live" && !!env.AIRWALLEX_ON_BEHALF_OF && !!env.AIRWALLEX_WEBHOOK_SECRET, "needed only if Airwallex is used; connected accounts keep customer funds out of a Vaulte-owned wallet", false);
+// Licensed principal of record: the partner holds the money and is the regulated provider; Vaulte is its agent or a technology provider.
+{
+  let legs = []; let parsed = true;
+  try { legs = JSON.parse(env.PARTNER_CATALOG_JSON || (env.PARTNER_CATALOG_FILE ? (await import("fs")).readFileSync(env.PARTNER_CATALOG_FILE, "utf8") : "[]")); } catch { parsed = false; }
+  const bad = legs.filter(l => !(l.structure && l.structure.fundsHeldBy === "PARTNER" && ["CUSTOMER_SUBACCOUNT", "PARTNER_SAFEGUARDED"].includes(l.structure.accountHolder) && l.structure.principal === l.partner && l.structure.agreementRef));
+  check("structure", "every live leg declares the licensed partner as principal, holder of funds and the signed agreement", parsed && bad.length === 0, parsed ? bad.map(l => l.id).join(", ") : "catalogue is not valid JSON");
+  let ps = {}; try { ps = JSON.parse(env.PARTNER_STRUCTURE_JSON || "{}"); } catch { /* checked below */ }
+  const fx = (env.FX_PROVIDERS ?? "airwallex,currencycloud,wise").split(",").map(s => s.trim()).filter(p => p && p !== "mock");
+  const missing = fx.filter(p => (p === "airwallex" ? env.AIRWALLEX_CLIENT_ID : p === "currencycloud" ? env.CURRENCYCLOUD_API_KEY : p === "wise" ? env.WISE_CLIENT_ID : "") && !ps[p]);
+  check("structure", "every configured live FX provider has a declared structure (PARTNER_STRUCTURE_JSON)", missing.length === 0, missing.join(", "));
+  const agentIn = new Set(legs.filter(l => l.structure?.vaulteRole === "AGENT").map(() => true)).size > 0 || Object.values(ps).some(v => v?.vaulteRole === "AGENT");
+  const live = (env.LIVE_COUNTRIES ?? "").split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
+  const unconfirmed = live.filter(c => !["confirmed", "not_required"].includes((env[`AGENT_REGISTRATION_${c}`] ?? "").toLowerCase()));
+  check("structure", "counsel confirmed the agent registration for every live country (AGENT_REGISTRATION_<CC>=confirmed|not_required)", !agentIn || unconfirmed.length === 0, `routes where Vaulte is the partner's agent stay closed for: ${unconfirmed.join(", ")}`);
+  check("structure", "fee collection agreed with each partner (FEE_COLLECTION=PARTNER_SHARE: the partner remits Vaulte's fee)", env.FEE_COLLECTION === "PARTNER_SHARE", "agree with each partner and counsel how Vaulte's fee reaches Vaulte: see docs/PRICING.md", false);
+}
 check("legal", "company and grievance details set", ["COMPANY_LEGAL_NAME", "COMPANY_ADDRESS", "GRIEVANCE_OFFICER_NAME", "GRIEVANCE_OFFICER_EMAIL", "SUPPORT_EMAIL", "DATA_REGION", "GOVERNING_LAW"].every(k => !!env[k]));
 check("legal", "live countries explicitly listed (LIVE_COUNTRIES): only counsel-cleared countries", !!env.LIVE_COUNTRIES?.trim(), "unset = every corridor your partners cover is open for live money; list only the countries counsel has cleared");
 check("legal", "OPS_EMAIL set (certificate requests and escrow disputes alert a human)", !!env.OPS_EMAIL, "", false);

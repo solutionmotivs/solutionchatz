@@ -20,6 +20,19 @@ export type LegKind =
   | "DIRECT" // fiat -> fiat with no stablecoin (local rails or authorised outward partner)
   | "INDIA_PAYOUT"; // authorised India partner turns hard-currency fiat into INR in a bank account
 
+/**
+ * Who is who on a live leg. Vaulte is never the licensed provider of record and never holds funds: the partner named here is the
+ * regulated party, holds the money (in a sub-account in the customer's name, or in its own safeguarded account) and converts and pays out.
+ * Vaulte's role is AGENT (registered/notified as the partner's agent where a country requires it) or TECH_PROVIDER (software only).
+ */
+export interface PartnerStructure {
+  principal: string;
+  fundsHeldBy: "PARTNER";
+  accountHolder: "CUSTOMER_SUBACCOUNT" | "PARTNER_SAFEGUARDED";
+  vaulteRole: "AGENT" | "TECH_PROVIDER";
+  agreementRef: string;
+}
+
 export interface Leg {
   id: string;
   partner: string;
@@ -48,6 +61,8 @@ export interface Leg {
   maxUsd: number;
   kinds: TransferKindT[];
   indiaAuth?: IndiaAuth;
+  /** Required on every live (non-mock) leg; see PartnerStructure. */
+  structure?: PartnerStructure;
   /** Present on legs priced live by an FX provider at quote time (rate is firm until validUntil). */
   live?: { provider: string; quoteId?: string; rate: number; midRate: number; validUntil: string };
 }

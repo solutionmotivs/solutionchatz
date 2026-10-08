@@ -62,8 +62,26 @@ export interface VirtualAccountResult {
 /** A certificate or confirmation a partner makes available for a transfer it executed. */
 export interface PartnerDocument { type: "EFIRA" | "FIRC" | "EBRC" | "BRC" | "BANK_CERT" | "IRM"; number: string; issuedOn?: string; refs?: Record<string, string>; file?: { data: Buffer; name: string } }
 
+/** What Vaulte sends a partner about a customer it has already verified. The partner stays the decision-maker on whether to accept the customer. */
+export interface CustomerPackage {
+  organizationId: string;
+  legalName: string;
+  country: string;
+  registrationNumber: string | null;
+  taxId: string | null;
+  businessType: string | null;
+  riskTier: string;
+  kybApprovedAt: string | null;
+}
+export type PartnerCustomerState = "SUBMITTED" | "NEEDS_INFO" | "APPROVED" | "REJECTED";
+export interface PartnerCustomerResult { partnerRef: string; status: PartnerCustomerState; note?: string }
+
 export interface StablecoinPartner {
   readonly id: string;
+  /** Optional: onboard the customer at the partner (Vaulte's KYB package in, partner's decision out). Partners without an API are handled by staff after the partner confirms. */
+  submitCustomer?(pkg: CustomerPackage): Promise<PartnerCustomerResult>;
+  /** Optional: poll the partner's decision for a previously submitted customer. */
+  getCustomerStatus?(partnerRef: string): Promise<PartnerCustomerResult>;
   createDeposit(opts: { transferId: string; token: Token; chain: Chain; expectedAmountMicro: bigint }): Promise<DepositInstruction>;
   createFiatFunding(opts: { transferId: string; currency: string; amountMinor: bigint }): Promise<FiatFundingInstruction>;
   createPayout(req: PayoutRequest): Promise<PayoutResult>;

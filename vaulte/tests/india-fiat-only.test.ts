@@ -3,7 +3,7 @@ import { assertIndiaFiatOnly, parseCatalog } from "../lib/routing/partners-confi
 import { MOCK_LEGS } from "../lib/routing/catalog";
 import { findRoutes } from "../lib/routing/engine";
 
-const leg = (o: Record<string, unknown>) => ({ id: "x.y.z", partner: "airwallex", kind: "INDIA_PAYOUT", country: "IN", jurisdiction: "IN", destCurrency: "INR", acceptsFiat: ["USD"], rails: ["IMPS"], tokens: [], chains: [], spreadBps: 10, feeBps: 10, fixedFeeUsd: 0, etaSec: 60, minUsd: 1, maxUsd: 1000, kinds: ["BUSINESS"], indiaAuth: "PA_CB_E", ...o });
+const leg = (o: Record<string, unknown>) => ({ id: "x.y.z", partner: "airwallex", kind: "INDIA_PAYOUT", country: "IN", jurisdiction: "IN", destCurrency: "INR", acceptsFiat: ["USD"], rails: ["IMPS"], tokens: [], chains: [], spreadBps: 10, feeBps: 10, fixedFeeUsd: 0, etaSec: 60, minUsd: 1, maxUsd: 1000, kinds: ["BUSINESS"], indiaAuth: "PA_CB_E", structure: { principal: "airwallex", fundsHeldBy: "PARTNER", accountHolder: "PARTNER_SAFEGUARDED", vaulteRole: "AGENT", agreementRef: "AWX-TEST-1" }, ...o });
 
 describe("nothing on the Indian side touches crypto", () => {
   it("the mock catalogue satisfies the rule", () => { expect(() => assertIndiaFiatOnly(MOCK_LEGS)).not.toThrow(); });

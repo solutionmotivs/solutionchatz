@@ -7,6 +7,7 @@ import { currencycloudFxProvider } from "./providers/currencycloud";
 import { wiseFxProvider } from "./providers/wise";
 import { MockFxDesk } from "./providers/mock";
 import type { FxProvider, FxQuote } from "./providers/types";
+import { providerStructure } from "@/lib/routing/structure";
 
 let overrideProviders: FxProvider[] | null = null;
 export function setFxProvidersForTests(p: FxProvider[] | null) { overrideProviders = p; }
@@ -77,12 +78,16 @@ export async function buildLiveLegs(a: LiveArgs): Promise<LiveLegs> {
     if (r.status === "rejected") { out.errors.push({ provider: providers[i].id, error: r.reason instanceof Error ? r.reason.message : String(r.reason) }); return; }
     const q = r.value;
     if (!(q.rate > 0) || q.validUntil.getTime() < Date.now() + 60_000) { out.errors.push({ provider: q.provider, error: "quote unusable (no rate or about to expire)" }); return; }
+    // Live money only moves through a partner whose principal-of-record structure is declared (see lib/routing/structure.ts).
+    const structure = a.sandbox === false ? providerStructure(q.provider) : undefined;
+    if (a.sandbox === false && !structure) { out.errors.push({ provider: q.provider, error: "no partner structure declared (PARTNER_STRUCTURE_JSON)" }); return; }
     const spreadBps = spreadBpsVsMid(q.rate, a.midDestPerSource);
     out.quotes.push({ ...q, spreadBps });
     out.legs.push({
       id: `${q.provider}.direct.${a.sourceCurrency}${a.destCurrency}`, partner: q.provider, kind: "DIRECT", country: q.country, jurisdiction: q.jurisdiction,
       srcCurrency: a.sourceCurrency, destCurrency: a.destCurrency, rails: [q.rail], tokens: [], chains: [],
       spreadBps, feeBps: q.feeBps, fixedFeeUsd: q.fixedFeeUsd, etaSec: q.etaSec, minUsd: q.minUsd, maxUsd: q.maxUsd, kinds: ["BUSINESS", "PERSONAL"],
+      ...(structure ? { structure } : {}),
       live: { provider: q.provider, quoteId: q.quoteId, rate: q.rate, midRate: a.midDestPerSource, validUntil: q.validUntil.toISOString() },
     });
   });

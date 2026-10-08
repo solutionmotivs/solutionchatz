@@ -84,12 +84,13 @@ export default function LandingPage() {
               Cross-border<br/>payments in<br/><em className="text-rust">hours, not days</em>
             </h1>
             <p className="font-mono text-[13px] leading-[1.85] text-slate max-w-[420px] mb-12">
-              Pay and get paid across borders with USDC, USDT or local bank transfers.
-              We compare the routes our licensed partners offer and show you every cost before you confirm; you choose speed or cost
-              and show you every fee before you commit.
+              We ask every licensed partner for a live price, show you the full cost stack, and pick the route that lands today at the lowest cost.
+              For business payments into India you also get the bank certificate (eFIRA/eBRC) attached to your records, and HS-code and purpose-code checks done before the money moves.
+              Settlement times are measured on real transfers and published, not promised.
             </p>
             <div className="flex gap-4">
               <Link href="/register" className="btn-primary">Try the Sandbox</Link>
+              <Link href="/quote" className="btn-ghost">Compare cost and speed</Link>
               <Link href="/pilot" className="btn-ghost">Join the pilot</Link>
               <Link href="/login" className="btn-ghost">Sign In</Link>
             </div>

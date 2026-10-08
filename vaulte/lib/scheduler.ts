@@ -13,6 +13,7 @@ export const JOBS: JobDef[] = [
   { name: "webhooks", everyMs: 1 * min, leaseMs: 5 * min, run: async () => (await import("@/lib/webhooks/dispatch")).processDueWebhooks() },
   { name: "erp-sync", everyMs: 15 * min, leaseMs: 20 * min, run: async () => (await import("@/lib/erp/sync")).syncAllConnections() },
   { name: "slow-transfers", everyMs: 10 * min, leaseMs: 5 * min, run: async () => (await import("@/lib/routing/settlement-metrics")).runSlowTransferWatchdog() },
+  { name: "partner-onboarding", everyMs: 10 * min, leaseMs: 10 * min, run: async () => (await import("@/lib/partners/customers")).refreshPartnerCustomers() },
   { name: "escrow-deadlines", everyMs: 1 * hour, leaseMs: 15 * min, run: async () => (await import("@/lib/escrow/service")).runDeemedApprovals() },
   { name: "certificate-poll", everyMs: 1 * hour, leaseMs: 30 * min, run: async () => (await import("@/lib/documents/poll")).runCertificatePoll() },
   // One list per run keeps peak memory low on small instances; each skips the download when the list is unchanged.

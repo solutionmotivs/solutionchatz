@@ -16,6 +16,13 @@
     "etaSec": 3600,
     "minUsd": 10,
     "maxUsd": 100000,
-    "kinds": ["BUSINESS", "PERSONAL"]
+    "kinds": ["BUSINESS", "PERSONAL"],
+    "structure": {
+      "principal": "airwallex",
+      "fundsHeldBy": "PARTNER",
+      "accountHolder": "CUSTOMER_SUBACCOUNT",
+      "vaulteRole": "AGENT",
+      "agreementRef": "REPLACE-WITH-SIGNED-AGREEMENT-ID"
+    }
   }
 ]

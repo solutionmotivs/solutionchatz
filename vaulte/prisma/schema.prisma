@@ -178,6 +178,8 @@ model Organization {
   dailyLimitUsd   BigInt @default(10000000)
   monthlyLimitUsd BigInt @default(500000000)
 
+  partnerCustomers PartnerCustomer[]
+
   planId        PlanId    @default(FREE)
   planExpiresAt DateTime?
 
@@ -431,11 +433,11 @@ model Invoice {
 }
 
 model InvoiceLineItem {
-  id          String @id @default(cuid())
+  id          String  @id @default(cuid())
   description String
   quantity    Float
   unitPrice   BigInt
-  taxRate     Float  @default(0)
+  taxRate     Float   @default(0)
   total       BigInt
   /// HS code (digits) for goods, validated against HS 2022
   hsCode      String?
@@ -1272,16 +1274,16 @@ model EscrowEvent {
 /// Certificates and bank messages that arrived by email from an allow-listed sender (banks, DGFT, partners). Dedupes by Message-ID
 /// and gives staff a queue for the ones that could not be matched to a transfer.
 model InboundMessage {
-  id         String   @id @default(cuid())
-  receivedAt DateTime @default(now())
-  messageId  String   @unique
-  fromAddr   String
-  subject    String
+  id           String    @id @default(cuid())
+  receivedAt   DateTime  @default(now())
+  messageId    String    @unique
+  fromAddr     String
+  subject      String
   /// MATCHED | UNMATCHED | AMBIGUOUS | REJECTED
-  status     String
-  note       String?
-  transferId String?
-  documentIds Json    @default("[]")
+  status       String
+  note         String?
+  transferId   String?
+  documentIds  Json      @default("[]")
   /// Staff who resolved an UNMATCHED/AMBIGUOUS message
   resolvedById String?
   resolvedAt   DateTime?
@@ -1302,23 +1304,46 @@ model JobLease {
 
 /// Interest from prospective pilot customers (public form). Test-mode pilot only: no live money is promised here.
 model PilotLead {
-  id        String   @id @default(cuid())
-  createdAt DateTime @default(now())
-  name      String
-  email     String   @unique
-  company   String
-  country   String
-  role      String?
+  id         String   @id @default(cuid())
+  createdAt  DateTime @default(now())
+  name       String
+  email      String   @unique
+  company    String
+  country    String
+  role       String?
   /// e.g. "US>IN"
-  corridor  String?
+  corridor   String?
   volumeBand String?
-  useCase   String?
-  notes     String?
-  consentAt DateTime
+  useCase    String?
+  notes      String?
+  consentAt  DateTime
   /// NEW | CONTACTED | PILOT | PAUSED | CLOSED
-  status    String   @default("NEW")
-  staffNote String?
-  source    String?
+  status     String   @default("NEW")
+  staffNote  String?
+  source     String?
 
   @@index([status, createdAt])
+}
+
+/// The customer's onboarding with a licensed partner. Vaulte runs KYC/KYB and sends the approved package; the partner (the regulated
+/// provider of record) decides. Live routing through a partner requires APPROVED.
+model PartnerCustomer {
+  id             String       @id @default(cuid())
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  partner        String
+  /// true = test mode (mock or sandbox partner), false = live partner
+  sandbox        Boolean      @default(true)
+  partnerRef     String?
+  /// INVITED | SUBMITTED | NEEDS_INFO | APPROVED | REJECTED
+  status         String       @default("INVITED")
+  note           String?
+  submittedAt    DateTime?
+  decidedAt      DateTime?
+  decidedBy      String?
+
+  @@unique([organizationId, partner, sandbox])
+  @@index([status, updatedAt])
 }
