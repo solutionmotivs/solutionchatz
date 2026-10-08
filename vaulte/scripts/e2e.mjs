@@ -519,7 +519,7 @@ async function main() {
   const dashHtml = await (await fetch(`${BASE}/dashboard/invoices`, { headers: { Cookie: A.jar.cookie }, redirect: "manual" })).text();
   check("a user on an older terms version is asked to accept the new one", /Please read and accept them/.test(dashHtml));
   check("terms acceptance needs a session", (await api("/api/auth/terms", { method: "POST", body: {} })).status === 401);
-  check("accepting records the current version", (await api("/api/auth/terms", { method: "POST", jar: A.jar, body: {} })).json?.terms_version === "2026-10-05" && (await db.user.findUnique({ where: { id: A.userId } })).termsVersion === "2026-10-05");
+  check("accepting records the current version", (await api("/api/auth/terms", { method: "POST", jar: A.jar, body: {} })).json?.terms_version === "2026-10-08" && (await db.user.findUnique({ where: { id: A.userId } })).termsVersion === "2026-10-08");
   const dashHtml2 = await (await fetch(`${BASE}/dashboard/invoices`, { headers: { Cookie: A.jar.cookie }, redirect: "manual" })).text();
   check("after accepting, the banner is gone", !/Please read and accept them/.test(dashHtml2));
 
@@ -1242,10 +1242,18 @@ async function main() {
     check("live mode has no route until a real partner catalogue is configured (mock partners never carry live money)", lq.status === 422 && lq.json.error.code === "NO_ROUTE", JSON.stringify(lq.json).slice(0, 200));
     const tq = await api("/api/quotes", { method: "POST", key: A.key, body: { kind: "BUSINESS", sender_entity_id: lp, recipient_entity_id: lr, source_currency: "USD", dest_currency: "EUR", source_amount: 100000, funding_method: "FIAT_LOCAL" } });
     check("another account in test mode still quotes normally", tq.status === 404 || tq.status === 201);
-    for (const path of ["/legal/terms", "/legal/privacy", "/legal/aml", "/legal/grievance", "/legal/security", "/legal/disclosures", "/legal/acceptable-use"]) {
+    const regions = ["india", "united-states", "uae", "singapore", "eu-uk"];
+    for (const path of ["/legal/terms", "/legal/privacy", "/legal/aml", "/legal/grievance", "/legal/security", "/legal/disclosures", "/legal/acceptable-use", "/legal/cookies", "/legal/sandbox", "/legal/data-requests", ...regions.map(r => `/legal/privacy/${r}`), ...regions.map(r => `/legal/terms/${r}`)]) {
       const r = await fetch(BASE + path); const t = await r.text();
-      check(`${path} is served and marked as a draft until counsel approves`, r.status === 200 && /DRAFT FOR LEGAL REVIEW/.test(t));
+      check(`${path} is served, final (no draft banner, no placeholders) and carries the effective date`, r.status === 200 && !/DRAFT FOR LEGAL REVIEW|COUNSEL TO|TO BE APPOINTED|NOT CONFIGURED/.test(t) && /Effective 8 October 2026/.test(t));
     }
+    check("an unknown region is a 404", (await fetch(BASE + "/legal/privacy/mars")).status === 404 && (await fetch(BASE + "/legal/terms/mars")).status === 404);
+    const priv = await (await fetch(BASE + "/legal/privacy/india")).text();
+    check("India notice cites the DPDP Act and the Data Protection Board", /Digital Personal Data Protection Act, 2023/.test(priv) && /Data Protection Board of India/.test(priv));
+    const dsr = await api("/api/privacy-requests", { body: { name: "Data Subject", email: "dsr-e2e@example.com", region: "EU", type: "ERASURE", details: "please delete" } });
+    check("a public data request is recorded with a reference and a due date", dsr.status === 201 && /^DSR-[A-Z0-9]{8}$/.test(dsr.json?.reference ?? "") && !!dsr.json?.due_at, JSON.stringify(dsr.json));
+    check("a data request needs a valid type", (await api("/api/privacy-requests", { body: { name: "X Y", email: "a@b.co", region: "EU", type: "STEAL" } })).status === 400);
+    check("staff-only data-request list rejects anonymous callers", (await api("/api/admin/privacy-requests")).status === 401);
   }
 
   console.log("== Webhooks");

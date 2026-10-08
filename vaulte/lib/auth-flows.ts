@@ -53,4 +53,4 @@ export async function createDefaultApiKey(organizationId: string): Promise<strin
   });
   return raw;
 }
-export const TERMS_VERSION = "2026-10-05";
+export const TERMS_VERSION = "2026-10-08";

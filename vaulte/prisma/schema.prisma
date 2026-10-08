@@ -1347,3 +1347,29 @@ model PartnerCustomer {
   @@unique([organizationId, partner, sandbox])
   @@index([status, updatedAt])
 }
+
+/// A data-subject request (access, correction, erasure, withdrawal of consent, portability, objection, nomination, appeal) from the public form or the account.
+model PrivacyRequest {
+  id           String    @id @default(cuid())
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  /// Public reference shown to the requester, e.g. DSR-7K3F9Q2A
+  reference    String    @unique
+  email        String
+  name         String
+  region       String
+  /// ACCESS | CORRECTION | ERASURE | WITHDRAW_CONSENT | PORTABILITY | OBJECTION | RESTRICTION | NOMINATE | APPEAL | OTHER
+  type         String
+  details      String?
+  userId       String?
+  /// RECEIVED | IDENTITY_PENDING | IN_PROGRESS | COMPLETED | PARTIALLY_COMPLETED | REFUSED
+  status       String    @default("RECEIVED")
+  dueAt        DateTime
+  decidedAt    DateTime?
+  decidedBy    String?
+  staffNote    String?
+  responseNote String?
+
+  @@index([status, dueAt])
+  @@index([email])
+}

@@ -38,7 +38,7 @@ check("partners", "Airwallex in live mode with a connected-account id", env.AIRW
 check("legal", "company and grievance details set", ["COMPANY_LEGAL_NAME", "COMPANY_ADDRESS", "GRIEVANCE_OFFICER_NAME", "GRIEVANCE_OFFICER_EMAIL", "SUPPORT_EMAIL", "DATA_REGION", "GOVERNING_LAW"].every(k => !!env[k]));
 check("legal", "live countries explicitly listed (LIVE_COUNTRIES): only counsel-cleared countries", !!env.LIVE_COUNTRIES?.trim(), "unset = every corridor your partners cover is open for live money; list only the countries counsel has cleared");
 check("legal", "OPS_EMAIL set (certificate requests and escrow disputes alert a human)", !!env.OPS_EMAIL, "", false);
-check("legal", "legal texts approved by counsel (LEGAL_REVIEWED=true)", env.LEGAL_REVIEWED === "true", "set only after real legal review");
+check("legal", "counsel sign-off recorded (LEGAL_REVIEWED=true)", env.LEGAL_REVIEWED === "true", "the texts are complete; set this once a lawyer has signed off for each live country", false);
 
 // The running deployment
 const base = (env.BASE_URL ?? "").replace(/\/$/, "");

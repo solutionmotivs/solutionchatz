@@ -248,14 +248,14 @@ export default function LandingPage() {
               </p>
             </div>
             {[
-              { title: "Product", links: ["Quotes","Invoice payments","Virtual accounts","Webhooks"] },
-              { title: "Developers", links: ["API reference","Sandbox","Webhooks"] },
-              { title: "Company", links: ["About","Security","Privacy","Terms"] },
+              { title: "Product", links: [["Instant quote", "/quote"], ["Join the pilot", "/pilot"], ["Create a test account", "/register"], ["Sign in", "/login"]] },
+              { title: "Legal", links: [["Terms of Service", "/legal/terms"], ["Privacy Policy", "/legal/privacy"], ["Cookie notice", "/legal/cookies"], ["Your data rights", "/legal/data-requests"], ["Fees and risks", "/legal/disclosures"]] },
+              { title: "Company", links: [["Security", "/legal/security"], ["AML and sanctions", "/legal/aml"], ["Acceptable use", "/legal/acceptable-use"], ["Test-mode terms", "/legal/sandbox"], ["Grievance officer", "/legal/grievance"]] },
             ].map(col => (
               <div key={col.title}>
                 <div className="font-display font-bold text-[10px] uppercase tracking-[0.12em] text-white/50 mb-5">{col.title}</div>
                 <ul className="space-y-2.5">
-                  {col.links.map(l => <li key={l}><a href="#" className="font-mono text-[11px] text-white/30 hover:text-white/60 transition-colors">{l}</a></li>)}
+                  {col.links.map(([label, href]) => <li key={href}><a href={href} className="font-mono text-[11px] text-white/30 hover:text-white/60 transition-colors">{label}</a></li>)}
                 </ul>
               </div>
             ))}
