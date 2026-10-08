@@ -1,6 +1,6 @@
 // Route engine: picks the cheapest / fastest combination of partner legs for a transfer.
 // Vaulte owns no rail; a "route" is an ordered set of partner legs with a firm price.
-import { TOKENS, TOKEN_PEG, type Chain, type Leg, type Preference, type Route, type Token, type TransferKindT, type FundingMethodT } from "@/lib/stablecoin/types";
+import { TOKENS, TOKEN_PEG, type Chain, type FeeTier, type Leg, type Preference, type Route, type Token, type TransferKindT, type FundingMethodT } from "@/lib/stablecoin/types";
 import { effectiveEtaSec, landsSameDay } from "./timing";
 import { CHAIN_ETA_SEC, CHAIN_FEE_USD, JURISDICTION_TOKEN_RULES, MOCK_LEGS } from "./catalog";
 
@@ -53,8 +53,20 @@ function buildRoute(legs: Leg[], token: Token | null, chain: Chain | null): Rout
   };
 }
 
+/** Cost of a size-based fee schedule for one transfer amount (USD). An amount above every finite tier uses the last tier. */
+export function tierCostUsd(schedule: FeeTier[] | undefined, amountUsd: number): number {
+  if (!schedule?.length) return 0;
+  const tier = schedule.find(t => t.upToUsd === null || amountUsd <= t.upToUsd) ?? schedule[schedule.length - 1];
+  return (tier.flatUsd ?? 0) + (amountUsd * (tier.bps ?? 0)) / 10_000;
+}
+
+/** Sum of the size-based schedules on every leg of the route. */
+export function scheduleCostUsd(route: Route, amountUsd: number): number {
+  return (route.legs ?? []).reduce((sum, l) => sum + tierCostUsd(l.feeSchedule, amountUsd), 0);
+}
+
 export function routeCostUsd(route: Route, amountUsd: number): number {
-  return (amountUsd * (route.spreadBps + route.feeBps)) / 10_000 + route.fixedFeeUsd;
+  return (amountUsd * (route.spreadBps + route.feeBps)) / 10_000 + route.fixedFeeUsd + scheduleCostUsd(route, amountUsd);
 }
 
 export interface RankContext { destCountry?: string; now?: number }

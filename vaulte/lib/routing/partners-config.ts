@@ -7,6 +7,16 @@ import type { Leg } from "@/lib/stablecoin/types";
 import { assertPrincipalStructure, StructureSchema } from "./structure";
 
 const Chain = z.enum(["solana", "base", "ethereum", "tron", "polygon"]);
+const FeeTierSchema = z.object({ upToUsd: z.number().positive().nullable(), flatUsd: z.number().min(0).max(1000).optional(), bps: z.number().min(0).max(500).optional() })
+  .refine(t => t.flatUsd !== undefined || t.bps !== undefined, "a fee tier needs flatUsd or bps");
+export const FeeScheduleSchema = z.array(FeeTierSchema).min(1).max(10).superRefine((tiers, ctx) => {
+  let prev = 0;
+  tiers.forEach((t, i) => {
+    if (t.upToUsd === null) { if (i !== tiers.length - 1) ctx.addIssue({ code: "custom", message: "only the last fee tier may be open-ended (upToUsd: null)" }); return; }
+    if (t.upToUsd <= prev) ctx.addIssue({ code: "custom", message: "fee tiers must be in ascending order of upToUsd" });
+    prev = t.upToUsd;
+  });
+});
 const LegSchema = z.object({
   id: z.string().min(3),
   partner: z.string().min(2).refine(p => !p.startsWith("mock_"), "mock partners are not allowed in the live catalogue"),
@@ -18,6 +28,7 @@ const LegSchema = z.object({
   spreadBps: z.number().min(0).max(500), feeBps: z.number().min(0).max(500), fixedFeeUsd: z.number().min(0).max(1000),
   etaSec: z.number().int().positive(), minUsd: z.number().positive(), maxUsd: z.number().positive(),
   kinds: z.array(z.enum(["BUSINESS", "PERSONAL"])).min(1), indiaAuth: z.enum(["PA_CB_E", "PA_CB_I", "MTSS", "LRS_AD"]).optional(),
+  feeSchedule: FeeScheduleSchema.optional(),
   structure: StructureSchema,
 });
 

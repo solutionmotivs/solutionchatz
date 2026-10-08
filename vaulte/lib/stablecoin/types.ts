@@ -21,6 +21,12 @@ export type LegKind =
   | "INDIA_PAYOUT"; // authorised India partner turns hard-currency fiat into INR in a bank account
 
 /**
+ * Flat-fee pricing by transfer size, e.g. "USD 19 up to 2,000, USD 29 up to 10,000, then 0.3%". The first tier whose `upToUsd` is not below the amount applies
+ * (`upToUsd: null` = no upper bound); its cost is `flatUsd` plus `bps` of the amount. It is charged on top of the leg's own spreadBps/feeBps/fixedFeeUsd.
+ */
+export interface FeeTier { upToUsd: number | null; flatUsd?: number; bps?: number }
+
+/**
  * Who is who on a live leg. Vaulte is never the licensed provider of record and never holds funds: the partner named here is the
  * regulated party, holds the money (in a sub-account in the customer's name, or in its own safeguarded account) and converts and pays out.
  * Vaulte's role is AGENT (registered/notified as the partner's agent where a country requires it) or TECH_PROVIDER (software only).
@@ -61,6 +67,8 @@ export interface Leg {
   maxUsd: number;
   kinds: TransferKindT[];
   indiaAuth?: IndiaAuth;
+  /** Size-based flat fees (see FeeTier). Optional; most legs are priced by spreadBps/feeBps/fixedFeeUsd alone. */
+  feeSchedule?: FeeTier[];
   /** Required on every live (non-mock) leg; see PartnerStructure. */
   structure?: PartnerStructure;
   /** Present on legs priced live by an FX provider at quote time (rate is firm until validUntil). */

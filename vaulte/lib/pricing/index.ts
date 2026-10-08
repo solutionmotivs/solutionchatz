@@ -1,7 +1,7 @@
 // Pricing: Vaulte's markup on top of firm partner costs, with a floor so a quote can never lose money.
 import type { CostBreakdown, RateTable, Route, TransferKindT } from "@/lib/stablecoin/types";
 import { minorToMajor } from "@/lib/currency";
-import { routeCostUsd } from "@/lib/routing/engine";
+import { routeCostUsd, scheduleCostUsd } from "@/lib/routing/engine";
 
 export interface MarkupTier {
   /** applies when transfer USD amount is < upTo (Infinity for the last tier) */
@@ -80,7 +80,7 @@ export function buildBreakdown(opts: {
   const markupBps = Math.max(opts.markupBps ?? markupBpsFor(kind, amountUsd), MIN_MARGIN_BPS);
 
   const partnerSpreadUsd = (amountUsd * route.spreadBps) / 10_000;
-  const partnerPctFeeUsd = (amountUsd * route.feeBps) / 10_000;
+  const partnerPctFeeUsd = (amountUsd * route.feeBps) / 10_000 + scheduleCostUsd(route, amountUsd); // percentage fee plus any size-based flat fee
   const networkFeeUsd = route.fixedFeeUsd;
   const partnerCostUsd = routeCostUsd(route, amountUsd);
   const markupUsd = (amountUsd * markupBps) / 10_000;
