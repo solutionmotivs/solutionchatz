@@ -248,7 +248,7 @@ export default function LandingPage() {
               </p>
             </div>
             {[
-              { title: "Product", links: [["Instant quote", "/quote"], ["Join the pilot", "/pilot"], ["Create a test account", "/register"], ["Sign in", "/login"]] },
+              { title: "Product", links: [["Instant quote", "/quote"], ["Join the pilot", "/pilot"], ["Create a test account", "/register"], ["Sign in", "/login"], ...(process.env.NEXT_PUBLIC_SANDBOX_URL ? [["Developer sandbox", process.env.NEXT_PUBLIC_SANDBOX_URL]] : [])] },
               { title: "Legal", links: [["Terms of Service", "/legal/terms"], ["Privacy Policy", "/legal/privacy"], ["Cookie notice", "/legal/cookies"], ["Your data rights", "/legal/data-requests"], ["Fees and risks", "/legal/disclosures"]] },
               { title: "Company", links: [["Security", "/legal/security"], ["AML and sanctions", "/legal/aml"], ["Acceptable use", "/legal/acceptable-use"], ["Test-mode terms", "/legal/sandbox"], ["Grievance officer", "/legal/grievance"]] },
             ].map(col => (

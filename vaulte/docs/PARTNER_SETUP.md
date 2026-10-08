@@ -72,7 +72,7 @@ Give me one provider at a time. For each I will: read its current docs, write th
 - Login works. The demo account trades 37 currencies, including USD, EUR, GBP, AED, SAR, JPY, CAD, AUD and **INR**, but **not CNH**.
 - Our adapter returned indicative rates for USD>EUR, USD>AED, USD>SAR, EUR>GBP and AED>USD, within 1 to 12 bps of the API's own mid-market rate on demo data. These are demo numbers, not an offer and not what live pricing will be.
 - **INR is not tradeable from this account**: USD>INR and EUR>INR answer `Rate could not be retrieved`, and AED>INR and SAR>INR answer `ccy_pair_is_not_tradeable`. So Currencycloud serves the offshore FX leg and **cannot land INR**. The Indian PA-CB partner does that, as designed. Ask Currencycloud whether a live account can ever trade INR (usually through a local partner and not for onward payout to India).
-- `funding_accounts/find` returns none for EUR. Funding accounts (virtual accounts) are not enabled on this demo account; ask Currencycloud to enable them before testing virtual-account creation.
+- `funding_accounts/find` on the master account returns none, and `funding_accounts/create` is "not enabled" there. This no longer blocks anything: each customer sub-account gets its own funding accounts automatically (see the walk-through below).
 - Every quote now carries the provider's trade **cut-off time**; the adapter learns the tradeable currencies from the account itself, so CNH is refused cleanly on this demo.
 - Re-run any time: `npx tsx scripts/currencycloud-live-check.ts`.
 

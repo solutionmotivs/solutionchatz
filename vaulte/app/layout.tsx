@@ -22,7 +22,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet" />
       </head>
       <body>
-        {process.env.DEMO_MODE === "true" && <div role="note" className="bg-ink text-paper text-center font-mono text-[11px] py-2 px-4">TEST-MODE DEMO: fake money and sample data only. No real payments are made. Do not enter real personal or bank details.</div>}
+        {process.env.DEMO_MODE === "true" && (
+          <div role="note" className="bg-ink text-paper text-center font-mono text-[11px] py-2 px-4">
+            SANDBOX: fake money and sample data only. No real payments are made. Do not enter real personal or bank details.
+            {process.env.PRODUCTION_URL ? <> The live site is <a className="underline" href={process.env.PRODUCTION_URL}>{process.env.PRODUCTION_URL.replace(/^https?:\/\//, "")}</a>.</> : null}
+          </div>
+        )}
         {children}
       </body>
     </html>
