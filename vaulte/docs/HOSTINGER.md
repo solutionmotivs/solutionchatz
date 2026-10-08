@@ -8,7 +8,7 @@ Hostinger web hosting offers MySQL only. Vaulte needs **PostgreSQL** (arrays, JS
 ## What you need (all free tiers)
 | What | Why | Variables |
 |---|---|---|
-| Postgres (for example Supabase or Neon) | the database | `DATABASE_URL` (pooled/pgbouncer URL with `?pgbouncer=true&connection_limit=1` if the host offers one) |
+| Postgres (for example Supabase or Neon) | the database | `DATABASE_URL` (pooled URL, with `pgbouncer=true`) and `DIRECT_URL` (non-pooled; the build uses it for `prisma db push`) |
 | S3-compatible bucket (Supabase Storage S3, Cloudflare R2, Backblaze B2) | KYC documents, encrypted by the app before upload | `S3_BUCKET`, `S3_REGION`, `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` |
 | Resend | emailed OTPs and notifications; verify the sending domain with DNS records | `RESEND_API_KEY`, `EMAIL_FROM` |
 

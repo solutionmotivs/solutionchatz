@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "build:hostinger": "prisma generate && prisma db push --skip-generate && next build",
+    "build:hostinger": "prisma generate && DATABASE_URL=\"${DIRECT_URL:-$DATABASE_URL}\" prisma db push --skip-generate && next build",
     "start": "next start",
     "lint": "next lint",
     "db:push": "prisma db push",
