@@ -23,5 +23,11 @@ Hostinger web hosting offers MySQL only. Vaulte needs **PostgreSQL** (arrays, JS
 ## Scheduled jobs
 The in-app scheduler (`ENABLE_INTERNAL_SCHEDULER=true`) only works if the Node process stays running. Shared hosting can stop idle Node processes, so also set a cron job (hPanel, Advanced, Cron jobs) every 5 minutes: `curl -s -X POST -H "x-cron-secret: $CRON_SECRET" "https://vaulte.iaexnetwork.com/api/internal/jobs/run?name=webhooks"`, and daily for `sanctions-ofac`, `sanctions-un`, `sanctions-uk`, `sanctions-rescreen`, `certificate-poll`. Job names are listed in `lib/scheduler.ts`.
 
+## DNS and SSL (what actually worked)
+`iaexnetwork.com` uses **Cloudflare nameservers**, so a subdomain created in Hostinger is not public until an **A record** is added in Cloudflare (`vaulte` -> the Hostinger server IP, DNS only / grey cloud). Create the subdomain and the A record first, then request the certificate (`hosting_ssl_install`); a certificate requested before the record exists fails the domain challenge and keeps retrying, so uninstall and install again. Email records for Resend also go into Cloudflare.
+
+## Deploy loop used
+Upload a `git archive` tarball to the site (TUS upload), then `Start Node.js build` with source `archive`, framework `next`, Node 22, build script `build:hostinger`. Production-mode installs skip dev dependencies, so the build tools (typescript, tailwind, postcss, prisma, vitest, `@types/*`) are regular dependencies.
+
 ## Checks after deploy
 `/api/health/ready` all green, `/quote`, `/pilot`, register with an emailed code, security headers, sanctions lists loaded (`POST /api/internal/sanctions/sync?list=OFAC_SDN` etc. with the cron secret), then `BASE_URL=https://vaulte.iaexnetwork.com node scripts/preflight.mjs` (it will still list the live-money blockers by design).
