@@ -28,6 +28,9 @@ export interface BeneficiaryDetails {
   accountNumber?: string;
   routingNumber?: string;
   sortCode?: string;
+  ifsc?: string;
+  /** India: UPI ID (VPA); the partner verifies it before paying. */
+  upiId?: string;
   bankName?: string;
 }
 
@@ -41,6 +44,8 @@ export interface PayoutRequest {
   purposeCode?: string | null;
   invoiceNumber?: string | null;
   beneficiary?: BeneficiaryDetails;
+  /** India: the rail chosen for this payout (UPI, IMPS, RTGS or NEFT). */
+  rail?: string;
 }
 
 export interface PayoutResult {

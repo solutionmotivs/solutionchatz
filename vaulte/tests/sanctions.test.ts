@@ -172,13 +172,12 @@ describe("wallet screening: optional Chainalysis source (against a stub)", () =>
       res.end(JSON.stringify(req.url!.endsWith("/0xbad") ? { identifications: [{ category: "sanctions", name: "SANCTIONS: Example" }] } : { identifications: [] }));
     });
     await new Promise<void>(r => srv.listen(0, "127.0.0.1", r));
-    process.env.CHAINALYSIS_API_KEY = "k"; process.env.CHAINALYSIS_BASE_URL = `http://127.0.0.1:${(srv.address() as AddressInfo).port}/api/v1/address`;
-    const { externalWalletCheck } = await import("../lib/sanctions/screen");
-    const bad = await externalWalletCheck("0xbad");
-    expect(bad).toMatchObject({ sanctioned: true, source: "chainalysis" });
-    expect((await externalWalletCheck("0xgood"))?.sanctioned).toBe(false);
+    const env = { CHAINALYSIS_API_KEY: "k", CHAINALYSIS_BASE_URL: `http://127.0.0.1:${(srv.address() as AddressInfo).port}/api/v1/address` } as unknown as NodeJS.ProcessEnv;
+    const { chainalysisSanctions } = await import("../lib/surveillance");
+    const p = chainalysisSanctions(env);
+    expect(await p.check("0xbad")).toMatchObject({ sanctioned: true, provider: "chainalysis" });
+    expect((await p.check("0xgood"))?.sanctioned).toBe(false);
     expect(seen[0]["x-api-key"]).toBe("k");
-    delete process.env.CHAINALYSIS_API_KEY; delete process.env.CHAINALYSIS_BASE_URL;
     srv.close();
   });
 });

@@ -94,7 +94,7 @@ const PRIMARY_LEGS: Leg[] = [
   // ── India: inbound payout (business: PA-CB export partner, personal: MTSS partner) ──
   {
     id: "in.payout.pacb", partner: "mock_in_pacb", kind: "INDIA_PAYOUT", country: "IN", jurisdiction: "IN",
-    destCurrency: "INR", acceptsFiat: ["USD", "AED", "EUR", "GBP", "SGD", "CAD", "AUD", "JPY", "HKD", "CNH", "SAR"], rails: ["IMPS", "RTGS"], tokens: [], chains: [],
+    destCurrency: "INR", acceptsFiat: ["USD", "AED", "EUR", "GBP", "SGD", "CAD", "AUD", "JPY", "HKD", "CNH", "SAR"], rails: ["UPI", "IMPS", "RTGS", "NEFT"], tokens: [], chains: [],
     spreadBps: 12, feeBps: 10, fixedFeeUsd: 0.5, etaSec: 4 * 3600, minUsd: 10, maxUsd: 29_000,
     kinds: ["BUSINESS"], indiaAuth: "PA_CB_E",
   },

@@ -1495,6 +1495,17 @@ async function main() {
   check("staff record the partner's decision, which is audited", ptSet.status === 200 && (await db.partnerCustomer.findUnique({ where: { id: ptc.json.id } })).status === "NEEDS_INFO" && (await db.auditLog.count({ where: { resourceId: ptc.json.id, action: "partner_customer.set_status" } })) === 1);
   await db.partnerCustomer.update({ where: { id: ptc.json.id }, data: { status: "APPROVED" } });
 
+  console.log("== India payout rail and recipient payout details");
+  check("an INR quote says which Indian rail pays the receiver and why", defaultQ.json.payout_rail && ["UPI", "IMPS", "RTGS", "NEFT"].includes(defaultQ.json.payout_rail.rail) && typeof defaultQ.json.payout_rail.reason === "string", JSON.stringify(defaultQ.json.payout_rail));
+  const bankPath = `/api/entities/${exporter}/bank-accounts`;
+  const badIfsc = await api(bankPath, { method: "POST", jar: A.jar, body: { account_name: "Shah Exports", currency: "INR", country: "IN", ifsc: "BAD", account_number: "123456789012" } });
+  const noDest = await api(bankPath, { method: "POST", jar: A.jar, body: { account_name: "Shah Exports", currency: "INR", country: "IN" } });
+  const badUpi = await api(bankPath, { method: "POST", jar: A.jar, body: { account_name: "Shah Exports", currency: "INR", country: "IN", upi_id: "not a upi" } });
+  check("Indian payout details are validated: bad IFSC, nothing at all, and a malformed UPI ID are refused", badIfsc.status === 400 && noDest.status === 400 && badUpi.status === 400, JSON.stringify([badIfsc.json, noDest.json, badUpi.json]).slice(0, 300));
+  const goodBank = await api(bankPath, { method: "POST", jar: A.jar, body: { account_name: "Shah Exports", currency: "INR", country: "IN", ifsc: "HDFC0001234", account_number: "50100123456789", upi_id: "shah@okhdfcbank" } });
+  check("a bank account with a UPI ID is stored, and only masked values come back", goodBank.status === 201 && goodBank.json.ifsc === "HDFC0001234" && !JSON.stringify(goodBank.json).includes("50100123456789") && !JSON.stringify(goodBank.json).includes("shah@okhdfcbank"), JSON.stringify(goodBank.json));
+  check("the list shows it, another customer cannot see it, and IFSC/UPI are refused outside India", (await api(bankPath, { jar: A.jar })).json.data.length >= 1 && (await api(bankPath, { jar: B.jar })).status === 404 && (await api(bankPath, { method: "POST", jar: A.jar, body: { account_name: "X", currency: "EUR", country: "DE", upi_id: "a@b", iban: "DE89370400440532013000" } })).status === 400);
+
   console.log("== Partner webhook endpoint");
   const body = JSON.stringify({ id: `evt_${uniq}`, type: "deposit.detected", data: { address: "nope" } });
   const sigOk = createHmac("sha256", MOCK_SECRET).update(body).digest("hex");

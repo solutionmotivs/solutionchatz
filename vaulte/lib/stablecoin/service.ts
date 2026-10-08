@@ -23,6 +23,7 @@ import { buildBreakdown, fromUsd, markupBpsFor, toUsd, validateMargin } from "@/
 import { buildLiveLegs, summariseFx, type LiveLegs } from "@/lib/fx/aggregator";
 import { MOCK_LEGS } from "@/lib/routing/catalog";
 import { realLegs } from "@/lib/routing/partners-config";
+import { pickIndiaRail } from "@/lib/routing/india-rails";
 import { applyAgentGate, agentRegistration, routeUsesVaulteAsAgent } from "@/lib/routing/structure";
 import { onboardingFor, requireApprovedPartners, type PartnerOnboarding } from "@/lib/partners/customers";
 import { findRoutes, nextRoute, pickAlternates, rankRoutes, routeCostUsd } from "@/lib/routing/engine";
@@ -293,6 +294,7 @@ export function serializeQuote(row: { id: string; expiresAt: Date; sourceCurrenc
     funding_method: row.fundingMethod,
     route: summariseRoute(built.chosen),
     estimated_arrival_seconds: built.chosen.etaSec,
+    ...(row.destCurrency === "INR" ? { payout_rail: pickIndiaRail(Number(row.destAmount) / 100, lastLeg(built.chosen).rails) } : {}),
     timing: built.timing,
     breakdown: built.breakdown,
     fees: feeSplit(built.breakdown),
@@ -514,7 +516,9 @@ export async function dispatchPayout(transferId: string): Promise<Transfer> {
       beneficiary: bank ? {
         accountName: bank.accountName, entityType: t.recipient.entityType === "INDIVIDUAL" ? "PERSONAL" : "COMPANY", bankCountry: bank.country, currency: bank.currency,
         iban: bank.iban ?? undefined, swiftBic: bank.swiftBic ?? undefined, accountNumber: bank.accountNumber ?? undefined, routingNumber: bank.routingNumber ?? undefined, sortCode: bank.sortCode ?? undefined,
+        ifsc: bank.ifsc ?? undefined, upiId: bank.upiId ?? undefined,
       } : undefined,
+      rail: t.destCurrency === "INR" ? pickIndiaRail(Number(t.destAmount) / 100, leg.rails, { hasUpiId: !!bank?.upiId }).rail : undefined,
       transferId: t.id, route, destCurrency: t.destCurrency, destAmountMinor: t.destAmount,
       recipientName: t.recipient.legalName, recipientCountry: t.recipient.country,
       purposeCode: t.purposeCode, invoiceNumber: invoice?.number ?? null,

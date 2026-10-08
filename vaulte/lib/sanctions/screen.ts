@@ -100,38 +100,25 @@ export async function screenName(q: Query, ctx: Ctx): Promise<ScreenResult> {
   return { outcome, topScore: top, matches, checkId: id, listsLoaded, stale, note };
 }
 
-export interface WalletResult { outcome: "CLEAR" | "BLOCK"; checkId: string; matches: { list: string; asset: string; listedName: string; programs: string[] }[]; source: string[] }
+export interface WalletResult { outcome: "CLEAR" | "REVIEW" | "BLOCK"; checkId: string; matches: { list: string; asset: string; listedName: string; programs: string[] }[]; source: string[] }
 
-export async function screenWalletAddress(address: string, ctx: Ctx): Promise<WalletResult> {
+export async function screenWalletAddress(address: string, ctx: Ctx & { chain?: string }): Promise<WalletResult> {
   const { addressKey } = await import("./sync");
   const key = addressKey(address);
   const hits = await db.sanctionsAddress.findMany({ where: { addrKey: key }, include: { entry: { select: { name: true, programs: true } } }, take: 10 });
-  const matches = hits.map(h => ({ list: h.list, asset: h.asset, listedName: h.entry.name, programs: h.entry.programs }));
+  const matches: { list: string; asset: string; listedName: string; programs: string[] }[] = hits.map(h => ({ list: h.list, asset: h.asset, listedName: h.entry.name, programs: h.entry.programs }));
   const source = ["lists"];
-  let outcome: "CLEAR" | "BLOCK" = matches.length ? "BLOCK" : "CLEAR";
-  const provider = await externalWalletCheck(address);
-  if (provider) {
-    source.push(provider.source);
-    if (provider.sanctioned) { outcome = "BLOCK"; matches.push({ list: provider.source, asset: "", listedName: provider.detail, programs: [] }); }
+  let outcome: "CLEAR" | "REVIEW" | "BLOCK" = matches.length ? "BLOCK" : "CLEAR";
+  // Analytics providers (lib/surveillance): sanctions exposure blocks, high risk or an outage goes to review. A list hit is final either way.
+  const { runSurveillance } = await import("@/lib/surveillance");
+  const live = await runSurveillance(address, { chain: ctx.chain });
+  for (const v of live.verdicts) {
+    source.push(v.provider);
+    if (v.sanctioned || v.risk !== "NONE") matches.push({ list: v.provider, asset: v.risk, listedName: v.detail || v.categories.join(", "), programs: v.categories });
   }
+  for (const f of live.failed) source.push(`${f.provider}:error`);
+  if (outcome !== "BLOCK" && live.outcome !== "CLEAR") outcome = live.outcome;
   const { versions } = await getIndex();
-  const checkId = await record(ctx, { address: key }, outcome, outcome === "BLOCK" ? 100 : 0, matches, versions);
+  const checkId = await record(ctx, { address: key }, outcome, outcome === "BLOCK" ? 100 : outcome === "REVIEW" ? 70 : 0, matches, versions, live.note);
   return { outcome, checkId, matches, source };
-}
-
-/** Optional second source: Chainalysis free sanctions-screening API (set CHAINALYSIS_API_KEY). Errors fail open here
- *  because the official lists above already ran; log and alert operations separately. */
-export async function externalWalletCheck(address: string): Promise<{ sanctioned: boolean; source: string; detail: string } | null> {
-  const key = process.env.CHAINALYSIS_API_KEY;
-  if (!key) return null;
-  const base = process.env.CHAINALYSIS_BASE_URL ?? "https://public.chainalysis.com/api/v1/address";
-  try {
-    const res = await fetch(`${base}/${encodeURIComponent(address)}`, { headers: { "X-API-Key": key, Accept: "application/json" }, signal: AbortSignal.timeout(8000) });
-    if (!res.ok) return null;
-    const j = await res.json() as { identifications?: { category?: string; name?: string }[] };
-    const first = j.identifications?.[0];
-    return { sanctioned: !!first, source: "chainalysis", detail: first ? `${first.category ?? "sanctions"}: ${first.name ?? ""}` : "" };
-  } catch {
-    return null;
-  }
 }
