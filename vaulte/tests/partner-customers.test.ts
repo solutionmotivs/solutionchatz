@@ -6,6 +6,8 @@ let n = 0;
 vi.mock("../lib/db", () => ({
   db: {
     organization: { findUniqueOrThrow: async () => ({ id: "org1", name: "Acme", legalName: "Acme LLC", country: "US", registrationNumber: "R1", taxId: "T1", businessType: "LLC", riskTier: "LOW", kybApprovedAt: new Date() }) },
+    verificationCase: { findFirst: async () => ({ profile: { address: "1 Main St, Austin", industry: "Software", expected_monthly_usd: 5000 } }) },
+    user: { findFirst: async () => ({ name: "Ada Lovelace", email: "ada@acme.example", phone: null }) },
     partnerCustomer: {
       findUnique: async ({ where: { organizationId_partner_sandbox: k } }: any) => rows.find(r => r.organizationId === k.organizationId && r.partner === k.partner && r.sandbox === k.sandbox) ?? null,
       findMany: async ({ where }: any) => rows.filter(r => r.organizationId === where.organizationId && r.sandbox === where.sandbox && where.partner.in.includes(r.partner)),
@@ -37,6 +39,11 @@ describe("delegated partner onboarding", () => {
     await expect(requireApprovedPartners("org1", route("airwallex"), false)).rejects.toMatchObject({ code: "PARTNER_ONBOARDING_PENDING" });
     expect(submit).toHaveBeenCalledTimes(1);
     expect(rows[0]).toMatchObject({ partner: "airwallex", sandbox: false, status: "SUBMITTED", partnerRef: "p-1" });
+  });
+  it("the package carries the approved KYB profile and the account owner as contact", async () => {
+    submit.mockResolvedValue({ partnerRef: "p-2", status: "APPROVED" });
+    await submitToPartner("org1", "airwallex", true);
+    expect(submit.mock.calls[0][0]).toMatchObject({ legalName: "Acme LLC", address: "1 Main St, Austin", city: "Austin", industry: "Software", expectedMonthlyUsd: 5000, contact: { firstName: "Ada", lastName: "Lovelace", email: "ada@acme.example" } });
   });
   it("live money proceeds once every partner on the route has approved", async () => {
     submit.mockResolvedValue({ partnerRef: "p-2", status: "APPROVED" });
