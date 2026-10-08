@@ -13,12 +13,31 @@ export const partnersOf = (route: Route) => Array.from(new Set(route.legs.map(l 
 
 async function packageFor(orgId: string): Promise<CustomerPackage> {
   const o = await db.organization.findUniqueOrThrow({ where: { id: orgId } });
-  return { organizationId: o.id, legalName: o.legalName ?? o.name, country: o.country ?? "", registrationNumber: o.registrationNumber, taxId: o.taxId, businessType: o.businessType, riskTier: o.riskTier, kybApprovedAt: o.kybApprovedAt?.toISOString() ?? null };
+  const kyb = await db.verificationCase.findFirst({ where: { organizationId: orgId, subjectType: "ORGANIZATION", status: "APPROVED" }, orderBy: { decidedAt: "desc" }, select: { profile: true } });
+  const prof = (kyb?.profile ?? {}) as Record<string, unknown>;
+  const str = (k: string) => (typeof prof[k] === "string" && (prof[k] as string).trim() ? (prof[k] as string).trim() : null);
+  const owner = await db.user.findFirst({ where: { organizationId: orgId, role: "OWNER" }, orderBy: { createdAt: "asc" }, select: { name: true, email: true, phone: true } });
+  const [first, ...rest] = (owner?.name ?? "").trim().split(/\s+/);
+  const address = str("address");
+  const parts = address?.split(",").map(x => x.trim()).filter(Boolean) ?? [];
+  return {
+    organizationId: o.id, legalName: o.legalName ?? o.name, country: o.country ?? "", registrationNumber: o.registrationNumber, taxId: o.taxId, businessType: o.businessType, riskTier: o.riskTier, kybApprovedAt: o.kybApprovedAt?.toISOString() ?? null,
+    address, city: str("city") ?? (parts.length > 1 ? parts[parts.length - 1] : null), postalCode: str("postal_code"),
+    incorporationDate: o.incorporationDate?.toISOString() ?? str("incorporation_date"), industry: str("industry"), website: o.website ?? str("website"),
+    expectedMonthlyUsd: typeof prof.expected_monthly_usd === "number" ? prof.expected_monthly_usd : null,
+    contact: owner ? { firstName: first || "Account", lastName: rest.join(" ") || "Owner", email: owner.email, phone: owner.phone ?? null } : undefined,
+  };
+}
+
+/** The customer's own account reference at a partner, if the partner has approved them (used so money moves from their sub-account, never a pooled one). */
+export async function customerRefFor(orgId: string, partnerId: string, sandbox: boolean): Promise<string | undefined> {
+  const r = await db.partnerCustomer.findUnique({ where: { organizationId_partner_sandbox: { organizationId: orgId, partner: partnerId, sandbox } }, select: { status: true, partnerRef: true } });
+  return r?.status === "APPROVED" && r.partnerRef ? r.partnerRef : undefined;
 }
 
 function apply(res: PartnerCustomerResult) {
   const decided = res.status === "APPROVED" || res.status === "REJECTED";
-  return { partnerRef: res.partnerRef, status: res.status, note: res.note ?? null, ...(decided ? { decidedAt: new Date() } : {}) };
+  return { partnerRef: res.partnerRef || null, status: res.status, note: res.note ?? null, ...(decided ? { decidedAt: new Date() } : {}) };
 }
 
 /** Start (or return) the customer's onboarding at one partner. Idempotent; never downgrades an APPROVED customer. */

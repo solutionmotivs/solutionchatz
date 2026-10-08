@@ -25,7 +25,7 @@ import { MOCK_LEGS } from "@/lib/routing/catalog";
 import { realLegs } from "@/lib/routing/partners-config";
 import { pickIndiaRail } from "@/lib/routing/india-rails";
 import { applyAgentGate, agentRegistration, routeUsesVaulteAsAgent } from "@/lib/routing/structure";
-import { onboardingFor, requireApprovedPartners, type PartnerOnboarding } from "@/lib/partners/customers";
+import { customerRefFor, onboardingFor, requireApprovedPartners, type PartnerOnboarding } from "@/lib/partners/customers";
 import { findRoutes, nextRoute, pickAlternates, rankRoutes, routeCostUsd } from "@/lib/routing/engine";
 import { bookFailureReversal, bookFundsReceived, bookPayout, finFromTransfer, rebookRevenue } from "@/lib/ledger/transfers";
 import { getPartner } from "@/lib/psp/stablecoin/registry";
@@ -428,7 +428,7 @@ export async function issueFunding(transferId: string): Promise<Transfer> {
       warning: `Send only ${token} on ${chain} to this address. Funds sent on another network may be lost.`,
     };
   } else {
-    const f = await partner.createFiatFunding({ transferId: t.id, currency: t.sourceCurrency, amountMinor: t.sourceAmount });
+    const f = await partner.createFiatFunding({ transferId: t.id, currency: t.sourceCurrency, amountMinor: t.sourceAmount, customerRef: await customerRefFor(t.organizationId, partner.id, t.isSandbox) });
     instructions = { type: "FIAT", currency: t.sourceCurrency, amount: Number(t.sourceAmount), reference: f.reference, bank_details: f.bankDetails };
   }
   return db.transfer.update({
@@ -513,6 +513,7 @@ export async function dispatchPayout(transferId: string): Promise<Transfer> {
     const invoice = t.invoiceId ? await db.invoice.findUnique({ where: { id: t.invoiceId }, select: { number: true } }) : null;
     const bank = await db.bankAccount.findFirst({ where: { entityId: t.recipientEntityId, currency: t.destCurrency }, orderBy: [{ isVerified: "desc" }, { createdAt: "desc" }] });
     const res = await getPartner(leg.partner).createPayout({
+      customerRef: await customerRefFor(t.organizationId, leg.partner, t.isSandbox),
       beneficiary: bank ? {
         accountName: bank.accountName, entityType: t.recipient.entityType === "INDIVIDUAL" ? "PERSONAL" : "COMPANY", bankCountry: bank.country, currency: bank.currency,
         iban: bank.iban ?? undefined, swiftBic: bank.swiftBic ?? undefined, accountNumber: bank.accountNumber ?? undefined, routingNumber: bank.routingNumber ?? undefined, sortCode: bank.sortCode ?? undefined,

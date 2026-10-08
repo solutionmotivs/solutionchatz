@@ -1,5 +1,6 @@
 // Virtual accounts: local receiving details issued by a licensed partner, per customer per country/currency.
 // Vaulte holds nothing. Every credit is swept immediately (convert + pay out); no balances are kept.
+import { customerRefFor } from "@/lib/partners/customers";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { log } from "@/lib/log";
@@ -30,7 +31,7 @@ export async function openVirtualAccount(organizationId: string, d: OpenVaInput)
   const existing = await db.virtualAccount.findUnique({ where: { entityId_country_currency: { entityId: entity.id, country: d.country, currency: d.currency } } });
   if (existing) throw new VaError("ALREADY_EXISTS", "A virtual account for this country and currency already exists", 409);
   try {
-    const issued = await getPartner(match.partner).createVirtualAccount({ entityId: entity.id, legalName: entity.legalName, country: d.country, currency: d.currency });
+    const issued = await getPartner(match.partner).createVirtualAccount({ entityId: entity.id, legalName: entity.legalName, country: d.country, currency: d.currency, customerRef: await customerRefFor(organizationId, match.partner, sandbox) });
     return await db.virtualAccount.create({
       data: {
         partner: match.partner, partnerRef: issued.partnerRef, country: d.country, currency: d.currency, details: issued.details as Prisma.InputJsonValue,

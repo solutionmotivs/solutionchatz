@@ -46,6 +46,8 @@ export interface PayoutRequest {
   beneficiary?: BeneficiaryDetails;
   /** India: the rail chosen for this payout (UPI, IMPS, RTGS or NEFT). */
   rail?: string;
+  /** The sender's own account at this partner (PartnerCustomer.partnerRef): money moves from the customer's sub-account, never a pooled Vaulte one. */
+  customerRef?: string;
 }
 
 export interface PayoutResult {
@@ -57,6 +59,8 @@ export interface VirtualAccountRequest {
   legalName: string;
   country: string;
   currency: string;
+  /** The customer's own account at this partner (PartnerCustomer.partnerRef), when the partner issues accounts per customer. */
+  customerRef?: string;
 }
 
 export interface VirtualAccountResult {
@@ -77,6 +81,16 @@ export interface CustomerPackage {
   businessType: string | null;
   riskTier: string;
   kybApprovedAt: string | null;
+  /** Taken from the approved KYB profile when present; partners that onboard by API need them. */
+  address?: string | null;
+  city?: string | null;
+  postalCode?: string | null;
+  incorporationDate?: string | null;
+  industry?: string | null;
+  website?: string | null;
+  expectedMonthlyUsd?: number | null;
+  /** The account owner: the person the partner's contact record is created for. */
+  contact?: { firstName: string; lastName: string; email: string; phone: string | null };
 }
 export type PartnerCustomerState = "SUBMITTED" | "NEEDS_INFO" | "APPROVED" | "REJECTED";
 export interface PartnerCustomerResult { partnerRef: string; status: PartnerCustomerState; note?: string }
@@ -88,7 +102,7 @@ export interface StablecoinPartner {
   /** Optional: poll the partner's decision for a previously submitted customer. */
   getCustomerStatus?(partnerRef: string): Promise<PartnerCustomerResult>;
   createDeposit(opts: { transferId: string; token: Token; chain: Chain; expectedAmountMicro: bigint }): Promise<DepositInstruction>;
-  createFiatFunding(opts: { transferId: string; currency: string; amountMinor: bigint }): Promise<FiatFundingInstruction>;
+  createFiatFunding(opts: { transferId: string; currency: string; amountMinor: bigint; customerRef?: string }): Promise<FiatFundingInstruction>;
   createPayout(req: PayoutRequest): Promise<PayoutResult>;
   createVirtualAccount(req: VirtualAccountRequest): Promise<VirtualAccountResult>;
   /** Optional: certificates/confirmations the partner holds for a payout it made. Polled by the certificate job; nothing is trusted as verified unless the partner is. */
