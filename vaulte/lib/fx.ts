@@ -61,6 +61,22 @@ export async function getLiveRates(
     }
   }
 
+  // Free, keyless reference rates (European Central Bank via Frankfurter) when no Open Exchange Rates key is set or it failed.
+  // AED and SAR are fixed to the dollar by their central banks. Indicative mid-market only: partners give the firm prices.
+  const stillMissing = targets.filter(t => !cached[t]);
+  if (stillMissing.length > 0 && process.env.FX_FREE_SOURCE !== "off") {
+    const fetched = await fetchFrankfurter(base, stillMissing);
+    for (const [target, rate] of Object.entries(fetched)) {
+      cached[target] = rate;
+      const spread = rate * (SPREAD_BPS / 10000);
+      await db.fxRate.upsert({
+        where: { base_target: { base, target } },
+        create: { base, target, midRate: rate, buyRate: rate - spread, sellRate: rate + spread, source: "frankfurter" },
+        update: { midRate: rate, buyRate: rate - spread, sellRate: rate + spread, source: "frankfurter" },
+      }).catch(() => undefined);
+    }
+  }
+
   // Fallback hardcoded rates for dev/offline
   const FALLBACK: Record<string, number> = {
     EUR: 0.9211, GBP: 0.7853, INR: 83.42, SGD: 1.3480,
@@ -79,6 +95,25 @@ export async function getLiveRates(
   }
 
   return cached;
+}
+
+const PEGS_PER_USD: Record<string, number> = { AED: 3.6725, SAR: 3.75 };
+
+/** ECB reference rates through Frankfurter (no key). Returns only the currencies it could price. */
+export async function fetchFrankfurter(base: string, targets: string[], f: typeof fetch = fetch): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  if (base !== "USD") return out;
+  for (const t of targets) if (PEGS_PER_USD[t]) out[t] = PEGS_PER_USD[t];
+  const need = targets.filter(t => !out[t] && t !== "USD");
+  if (!need.length) return out;
+  try {
+    const res = await f(`${process.env.FRANKFURTER_URL ?? "https://api.frankfurter.dev/v1"}/latest?base=USD&symbols=${need.join(",")}`, { signal: AbortSignal.timeout(6000) });
+    if (res.ok) {
+      const j = (await res.json()) as { rates?: Record<string, number> };
+      for (const [k, v] of Object.entries(j.rates ?? {})) if (typeof v === "number" && v > 0) out[k] = v;
+    }
+  } catch { /* stale cache or no quote */ }
+  return out;
 }
 
 export async function convertToUsd(
