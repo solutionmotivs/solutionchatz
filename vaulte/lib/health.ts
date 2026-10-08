@@ -1,6 +1,6 @@
 // Readiness checks. Details are deliberately coarse: this endpoint is public, so it never reveals versions, hosts or secrets.
 import { db } from "@/lib/db";
-import { guardsInstalled } from "@/lib/ledger/guards";
+import { guardsInstalled, installGuards } from "@/lib/ledger/guards";
 
 export interface Check { name: string; ok: boolean; detail?: string; critical: boolean }
 
@@ -12,7 +12,12 @@ export async function readiness(): Promise<{ ok: boolean; checks: Check[] }> {
 
   try { await db.$queryRaw`SELECT 1`; add("database", true, true); } catch { add("database", false, true, "unreachable"); }
 
-  try { add("ledger_guards", await guardsInstalled(), true, "append-only/balance triggers"); } catch { add("ledger_guards", false, true, "unknown"); }
+  try {
+    let guards = await guardsInstalled();
+    // Opted in with LEDGER_GUARDS_AUTOINSTALL=true: install them now instead of waiting for the first posting, so a fresh database is ready at once.
+    if (!guards && process.env.LEDGER_GUARDS_AUTOINSTALL === "true") { await installGuards(); guards = await guardsInstalled(); }
+    add("ledger_guards", guards, true, "append-only/balance triggers");
+  } catch { add("ledger_guards", false, true, "unknown"); }
 
   try {
     const lists = await db.sanctionsList.findMany({ where: { status: "OK" }, select: { code: true, fetchedAt: true } });
