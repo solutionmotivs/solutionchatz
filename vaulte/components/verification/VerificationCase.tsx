@@ -201,16 +201,22 @@ function ItemsSection({ c, editable, onSaved, setErr }: SectionProps) {
 
 function PeopleSection({ c, editable, onSaved, setErr }: SectionProps) {
   const roles = req(c).people as { role: string; label: string; min: number }[];
-  const [f, setF] = useState<any>({ role: roles[0]?.role, full_name: "", date_of_birth: "", nationality: c.country, country_of_residence: c.country, ownership_pct: "", is_pep: false, pan: "", id_type: "" });
+  const [f, setF] = useState<any>({ role: roles[0]?.role, full_name: "", date_of_birth: "", nationality: c.country, country_of_residence: c.country, ownership_pct: "", is_pep: false, pan: "", id_type: "", email: "", phone_cc: "", phone: "", line1: "", city: "", state: "", postcode: "" });
   async function add() {
     setErr("");
     const body: any = { role: f.role, full_name: f.full_name, is_pep: f.is_pep };
     for (const k of ["date_of_birth", "nationality", "country_of_residence", "pan", "id_type"]) if (f[k]) body[k] = f[k];
     if (f.role === "UBO") body.ownership_pct = Number(f.ownership_pct);
+    // Contact details travel with the verified profile to the partners that onboard by API; all optional here.
+    const contact: any = {};
+    if (f.email) contact.email = f.email.trim();
+    if (f.phone) { contact.phone = f.phone.replace(/\D/g, ""); if (f.phone_cc) contact.phone_country_code = f.phone_cc.replace(/\D/g, ""); }
+    if (f.line1 && f.city && f.postcode) contact.address = { line1: f.line1.trim(), city: f.city.trim(), ...(f.state ? { state: f.state.trim() } : {}), postcode: f.postcode.trim(), country: f.country_of_residence };
+    if (Object.keys(contact).length) body.contact = contact;
     const r = await api(`/api/verification/${c.id}/people`, { body });
     if (!r.ok) return setErr(r.error?.message ?? "Could not add");
     onSaved(r.data);
-    setF({ ...f, full_name: "", date_of_birth: "", ownership_pct: "", is_pep: false, pan: "", id_type: "" });
+    setF({ ...f, full_name: "", date_of_birth: "", ownership_pct: "", is_pep: false, pan: "", id_type: "", email: "", phone: "", line1: "", city: "", state: "", postcode: "" });
   }
   async function remove(pid: string) {
     const r = await api(`/api/verification/${c.id}/people/${pid}`, { method: "DELETE" });
@@ -242,6 +248,11 @@ function PeopleSection({ c, editable, onSaved, setErr }: SectionProps) {
           {f.role === "UBO" && <div><label className="label-text">Ownership %</label><input className="input-field" type="number" min={0} max={100} value={f.ownership_pct} onChange={e => setF({ ...f, ownership_pct: e.target.value })} /></div>}
           {c.country === "IN" && <div><label className="label-text">PAN (optional)</label><input className="input-field" value={f.pan} onChange={e => setF({ ...f, pan: e.target.value.toUpperCase() })} maxLength={10} autoComplete="off" /></div>}
           <div><label className="label-text">ID type</label><select className="input-field" value={f.id_type} onChange={e => setF({ ...f, id_type: e.target.value })}><option value="">Select…</option>{(req(c).id_types ?? []).map((t: string) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}</select></div>
+          <div><label className="label-text">Email (for partner onboarding)</label><input className="input-field" type="email" value={f.email} onChange={e => setF({ ...f, email: e.target.value })} autoComplete="off" /></div>
+          <div className="grid grid-cols-3 gap-2"><div><label className="label-text">Code</label><input className="input-field" value={f.phone_cc} onChange={e => setF({ ...f, phone_cc: e.target.value })} placeholder="91" maxLength={4} /></div><div className="col-span-2"><label className="label-text">Mobile</label><input className="input-field" value={f.phone} onChange={e => setF({ ...f, phone: e.target.value })} maxLength={15} /></div></div>
+          <div><label className="label-text">Home address</label><input className="input-field" value={f.line1} onChange={e => setF({ ...f, line1: e.target.value })} placeholder="Street and number" /></div>
+          <div><label className="label-text">City</label><input className="input-field" value={f.city} onChange={e => setF({ ...f, city: e.target.value })} /></div>
+          <div className="grid grid-cols-2 gap-2"><div><label className="label-text">State</label><input className="input-field" value={f.state} onChange={e => setF({ ...f, state: e.target.value })} /></div><div><label className="label-text">Postcode</label><input className="input-field" value={f.postcode} onChange={e => setF({ ...f, postcode: e.target.value })} maxLength={12} /></div></div>
           <label className="flex items-center gap-2 text-[12px] text-ink sm:col-span-2 mt-6"><input type="checkbox" checked={f.is_pep} onChange={e => setF({ ...f, is_pep: e.target.checked })} /> Holds or has held a prominent public position, or is a close family member/associate of someone who does</label>
           <div className="sm:col-span-3"><button className="btn-primary disabled:opacity-40" disabled={f.full_name.length < 2} onClick={add}>Add person</button></div>
         </div>

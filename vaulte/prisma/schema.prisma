@@ -179,6 +179,7 @@ model Organization {
   monthlyLimitUsd BigInt @default(500000000)
 
   partnerCustomers PartnerCustomer[]
+  payAddresses     PayAddress[]
 
   planId        PlanId    @default(FREE)
   planExpiresAt DateTime?
@@ -299,6 +300,7 @@ model Entity {
   screeningStatus   String             @default("CLEAR")
 
   @@index([organizationId])
+  payAddress PayAddress?
 }
 
 model BankAccount {
@@ -1376,4 +1378,23 @@ model PrivacyRequest {
 
   @@index([status, dueAt])
   @@index([email])
+}
+
+/// A short, shareable payment address such as acme@vaulte: a directory alias for a VERIFIED entity's receiving instructions
+/// (its virtual accounts per currency). It moves nothing and holds nothing; the licensed partner behind each account does.
+model PayAddress {
+  id             String       @id @default(cuid())
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  handle         String       @unique
+  status         String       @default("ACTIVE") // ACTIVE | DISABLED
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  entityId       String
+  entity         Entity       @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  /// Shown on the public page next to the verified name
+  tagline        String?
+
+  @@unique([entityId])
+  @@index([organizationId])
 }

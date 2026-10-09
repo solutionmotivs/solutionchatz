@@ -16,6 +16,7 @@ Dates are working estimates for one engineer, not promises. "Unverified" means b
 | Currencycloud demo: quotes, customer sub-account with its own funding accounts, deposit, convert, payout | **proven on the demo** |
 | Nium sandbox: FX provider, corporate customer onboarding (decision by webhook), customer virtual account, payout request to an Indian bank by IFSC | **built and proven on the sandbox up to the payout**; the payout waits for wallet funds (a simulated third-party credit stays pending); live on the sandbox site: USD>INR quotes use Nium's rate (`INDIA_FX_PROVIDERS=nium`) |
 | Circle: the key you sent is a **Circle Console** key (programmable wallets: `/v1/w3s/...` answers, appId returned, 0 wallets). It is **not** a Circle Mint key (`api-sandbox.circle.com` answers 401) and CPN endpoints are not enabled for it | key stored; see section 4 |
+| Dashboard: **Partner approvals** page (status, next step, the partner's own link when it needs something), KYB form collects each person's email, phone and address, and **Pay ID** (`name@vaulte`, public page `/id/<name>` with the verified name, receiving accounts per currency and a QR code) | built (553 e2e checks) |
 | Two environments: production `vaulte.iaexnetwork.com`, sandbox `vaulte-sandbox.iaexnetwork.com`, legal pack for 5 regions | live |
 
 ## 2. What is not built yet (the real remaining work), in build order

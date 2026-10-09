@@ -1503,6 +1503,21 @@ async function main() {
   check("staff record the partner's decision, which is audited", ptSet.status === 200 && (await db.partnerCustomer.findUnique({ where: { id: ptc.json.id } })).status === "NEEDS_INFO" && (await db.auditLog.count({ where: { resourceId: ptc.json.id, action: "partner_customer.set_status" } })) === 1);
   await db.partnerCustomer.update({ where: { id: ptc.json.id }, data: { status: "APPROVED" } });
 
+  console.log("== Pay ID (shareable payment address)");
+  const hid = "e2e" + Math.random().toString(36).slice(2, 8);
+  check("a reserved or malformed handle is refused", (await api("/api/pay-addresses", { method: "POST", key: A.key, body: { handle: "admin", entity_id: exporter } })).status === 400 && (await api("/api/pay-addresses", { method: "POST", key: A.key, body: { handle: "a", entity_id: exporter } })).status === 400);
+  const pid = await api("/api/pay-addresses", { method: "POST", key: A.key, body: { handle: `${hid}@vaulte`, entity_id: exporter, tagline: "Textile exports" } });
+  check("a verified account holder claims a Pay ID", pid.status === 201 && pid.json.address === `${hid}@vaulte` && pid.json.url.endsWith(`/id/${hid}`), JSON.stringify(pid.json));
+  check("one Pay ID per holder, and a taken handle is refused", (await api("/api/pay-addresses", { method: "POST", key: A.key, body: { handle: `${hid}x`, entity_id: exporter } })).status === 409);
+  const pub = await api(`/api/public/id/${hid}`);
+  check("the public lookup shows the verified name and the receiving accounts, nothing else", pub.status === 200 && pub.json.name && pub.json.accounts.some(a => a.currency === "EUR" && a.details.iban) && !JSON.stringify(pub.json).includes("organization"), JSON.stringify(pub.json).slice(0, 300));
+  const idPage = await fetch(`${BASE}/id/${hid}`); const idHtml = await idPage.text();
+  check("the public page renders the name, the handle and a QR code", idPage.status === 200 && idHtml.includes(`${hid}@vaulte`) && /<svg/.test(idHtml));
+  check("an unknown handle is a 404 and the page says so", (await api("/api/public/id/nobodyhere1")).status === 404 && /No active Pay ID/.test(await (await fetch(`${BASE}/id/nobodyhere1`)).text()));
+  const off = await api(`/api/pay-addresses/${pid.json.id}`, { method: "PATCH", key: A.key, body: { status: "DISABLED" } });
+  check("switching it off hides it publicly", off.status === 200 && (await api(`/api/public/id/${hid}`)).status === 404);
+  check("another account cannot see or change it", (await api(`/api/pay-addresses/${pid.json.id}`, { method: "PATCH", key: B.key, body: { status: "ACTIVE" } })).status === 404);
+
   console.log("== India payout rail and recipient payout details");
   check("an INR quote says which Indian rail pays the receiver and why", defaultQ.json.payout_rail && ["UPI", "IMPS", "RTGS", "NEFT"].includes(defaultQ.json.payout_rail.rail) && typeof defaultQ.json.payout_rail.reason === "string", JSON.stringify(defaultQ.json.payout_rail));
   const bankPath = `/api/entities/${exporter}/bank-accounts`;

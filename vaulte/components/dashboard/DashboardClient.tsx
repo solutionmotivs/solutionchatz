@@ -111,6 +111,20 @@ export default function DashboardClient({ user, stats, recentPayments, org }: Pr
             Virtual accounts
           </a>
           <a
+            href="/dashboard/pay-id"
+            className="w-full flex items-center gap-3 px-3 py-2.5 font-mono text-xs tracking-wider text-left transition-colors text-white/35 hover:text-white/60 hover:bg-white/4"
+          >
+            <span className="text-gold text-sm">@</span>
+            Pay ID
+          </a>
+          <a
+            href="/dashboard/partners"
+            className="w-full flex items-center gap-3 px-3 py-2.5 font-mono text-xs tracking-wider text-left transition-colors text-white/35 hover:text-white/60 hover:bg-white/4"
+          >
+            <span className="text-gold text-sm">✓</span>
+            Partner approvals
+          </a>
+          <a
             href="/dashboard/escrow"
             className="w-full flex items-center gap-3 px-3 py-2.5 font-mono text-xs tracking-wider text-left transition-colors text-white/35 hover:text-white/60 hover:bg-white/4"
           >
