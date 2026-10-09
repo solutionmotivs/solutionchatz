@@ -15,6 +15,12 @@ const Body = z.object({
   is_pep: z.boolean().optional(),
   pan: z.string().max(12).optional(),
   id_type: z.enum(ID_TYPES).optional(),
+  contact: z.object({
+    email: z.string().email().max(120).optional(),
+    phone: z.string().regex(/^[0-9]{5,15}$/, "Phone digits only, without the country code").optional(),
+    phone_country_code: z.string().regex(/^[0-9]{1,4}$/).optional(),
+    address: z.object({ line1: z.string().min(2).max(100), line2: z.string().max(100).optional(), city: z.string().min(1).max(50), state: z.string().max(50).optional(), postcode: z.string().min(2).max(12), country: z.string().length(2) }).optional(),
+  }).optional(),
 });
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {

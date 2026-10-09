@@ -8,7 +8,7 @@ import { invoiceAuth } from "@/lib/invoices/auth";
 import { submitToPartner } from "@/lib/partners/customers";
 import { getPartner } from "@/lib/psp/stablecoin/registry";
 
-const present = (r: { id: string; partner: string; sandbox: boolean; status: string; note: string | null; submittedAt: Date | null; decidedAt: Date | null }) => ({ id: r.id, partner: r.partner, mode: r.sandbox ? "test" : "live", status: r.status, note: r.note, submitted_at: r.submittedAt?.toISOString() ?? null, decided_at: r.decidedAt?.toISOString() ?? null });
+const present = (r: { id: string; partner: string; sandbox: boolean; status: string; note: string | null; actionUrl?: string | null; submittedAt: Date | null; decidedAt: Date | null }) => ({ id: r.id, partner: r.partner, mode: r.sandbox ? "test" : "live", status: r.status, note: r.note, action_url: r.actionUrl ?? null, submitted_at: r.submittedAt?.toISOString() ?? null, decided_at: r.decidedAt?.toISOString() ?? null });
 
 export async function GET(req: NextRequest) {
   const a = await invoiceAuth(req, false);

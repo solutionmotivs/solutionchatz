@@ -4,6 +4,7 @@ import { minorToMajor } from "@/lib/currency";
 import type { Leg, FxSummary, TransferKindT } from "@/lib/stablecoin/types";
 import { airwallexFxProvider } from "./providers/airwallex";
 import { currencycloudFxProvider } from "./providers/currencycloud";
+import { niumFxProvider } from "./providers/nium";
 import { wiseFxProvider } from "./providers/wise";
 import { MockFxDesk } from "./providers/mock";
 import type { FxProvider, FxQuote } from "./providers/types";
@@ -12,15 +13,16 @@ import { providerStructure } from "@/lib/routing/structure";
 let overrideProviders: FxProvider[] | null = null;
 export function setFxProvidersForTests(p: FxProvider[] | null) { overrideProviders = p; }
 
-/** FX_PROVIDERS = comma list of: airwallex, currencycloud, wise, mock. Default: airwallex if keyed, plus mock outside production. */
+/** FX_PROVIDERS = comma list of: airwallex, currencycloud, wise, nium, mock. Default: airwallex if keyed, plus mock outside production. */
 export function fxProviders(sandbox = true): FxProvider[] {
   if (overrideProviders) return overrideProviders;
-  const want = (process.env.FX_PROVIDERS ?? "airwallex,currencycloud,wise,mock").split(",").map(s => s.trim());
+  const want = (process.env.FX_PROVIDERS ?? "airwallex,currencycloud,wise,nium,mock").split(",").map(s => s.trim());
   const out: FxProvider[] = [];
   // Test mode never touches live money: Airwallex is used only when its environment matches the mode (sandbox keys in test mode, live keys in live mode).
   const awxLive = process.env.AIRWALLEX_ENV === "live";
   if (want.includes("airwallex") && sandbox !== awxLive) { const a = airwallexFxProvider(); if (a) out.push(a); }
   if (want.includes("currencycloud") && sandbox !== (process.env.CURRENCYCLOUD_ENV === "live")) { const c = currencycloudFxProvider(); if (c) out.push(c); }
+  if (want.includes("nium") && sandbox !== (process.env.NIUM_ENV === "live")) { const n = niumFxProvider(); if (n) out.push(n); }
   if (want.includes("wise") && sandbox !== (process.env.WISE_ENV === "live")) { const w = wiseFxProvider(); if (w) out.push(w); }
   if (want.includes("mock") && sandbox) {
     out.push(new MockFxDesk("mock_fx_a", 28, 0), new MockFxDesk("mock_fx_b", 19, 1.0), new MockFxDesk("mock_fx_c", 35, 0, "US"));

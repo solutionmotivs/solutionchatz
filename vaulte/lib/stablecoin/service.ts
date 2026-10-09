@@ -25,7 +25,7 @@ import { MOCK_LEGS } from "@/lib/routing/catalog";
 import { realLegs } from "@/lib/routing/partners-config";
 import { pickIndiaRail } from "@/lib/routing/india-rails";
 import { applyAgentGate, agentRegistration, routeUsesVaulteAsAgent } from "@/lib/routing/structure";
-import { customerRefFor, onboardingFor, requireApprovedPartners, type PartnerOnboarding } from "@/lib/partners/customers";
+import { applyCustomerStatusEvent, customerRefFor, onboardingFor, requireApprovedPartners, type PartnerOnboarding } from "@/lib/partners/customers";
 import { findRoutes, nextRoute, pickAlternates, rankRoutes, routeCostUsd } from "@/lib/routing/engine";
 import { bookFailureReversal, bookFundsReceived, bookPayout, finFromTransfer, rebookRevenue } from "@/lib/ledger/transfers";
 import { getPartner } from "@/lib/psp/stablecoin/registry";
@@ -700,6 +700,7 @@ async function routeEvent(partnerId: string, ev: PartnerEventInput): Promise<boo
       await onFundsConfirmed(t.id, {});
       return true;
     }
+    case "customer.status": return applyCustomerStatusEvent(partnerId, { customer_ref: String(d.customer_ref), state: String(d.state), note: d.note ? String(d.note) : undefined, action_url: d.action_url ? String(d.action_url) : undefined });
     case "payout.completed": {
       const t = await findTransferForEvent(d);
       if (!t) return false;

@@ -84,6 +84,7 @@ export interface CustomerPackage {
   /** Taken from the approved KYB profile when present; partners that onboard by API need them. */
   address?: string | null;
   city?: string | null;
+  state?: string | null;
   postalCode?: string | null;
   incorporationDate?: string | null;
   industry?: string | null;
@@ -91,9 +92,23 @@ export interface CustomerPackage {
   expectedMonthlyUsd?: number | null;
   /** The account owner: the person the partner's contact record is created for. */
   contact?: { firstName: string; lastName: string; email: string; phone: string | null };
+  /** Applicant, directors and owners from the approved KYB case (names come from documents/registries). */
+  people?: PackagePerson[];
+  /** Account used to return funds if a payment bounces; partners that onboard by API require it. */
+  returnBank?: { accountName: string; accountNumber: string; bankCountry: string; currency: string; routingType: string; routingValue: string; bankName?: string };
+  /** Consent and the device that gave it (a partner's declaration and fraud checks). */
+  consent?: { acceptedAt: string; ip?: string; deviceInfo?: string; sessionId?: string };
+  /** Documents already uploaded at the partner (its file ids), by its document type. */
+  documents?: { type: string; fileIds: string[] }[];
+}
+export interface PackagePerson {
+  role: "APPLICANT" | "UBO" | "DIRECTOR" | "SIGNATORY";
+  firstName: string; lastName: string; dateOfBirth: string | null; nationality: string | null; ownershipPct: number | null;
+  email: string | null; phone: string | null; phoneCountryCode: string | null;
+  address: { line1: string; line2?: string; city: string; state?: string; postcode: string; country: string } | null;
 }
 export type PartnerCustomerState = "SUBMITTED" | "NEEDS_INFO" | "APPROVED" | "REJECTED";
-export interface PartnerCustomerResult { partnerRef: string; status: PartnerCustomerState; note?: string }
+export interface PartnerCustomerResult { partnerRef: string; status: PartnerCustomerState; note?: string; /** A step only the partner can complete (its hosted KYC or RFI form). */ actionUrl?: string }
 
 export interface StablecoinPartner {
   readonly id: string;
@@ -109,5 +124,5 @@ export interface StablecoinPartner {
   listDocuments?(q: { partnerRef: string | null; transferId: string; destCountry: string; purposeCode: string | null; completedAt: Date | null }): Promise<PartnerDocument[]>;
   verifyWebhook(rawBody: string, headers: Headers, url?: URL): boolean;
   /** Convert the partner's own webhook payload into Vaulte's event shape ({id, type, data}); null = not relevant. */
-  normalizeWebhook?(payload: unknown): { id: string; type: string; data: Record<string, unknown> } | null;
+  normalizeWebhook?(payload: unknown, headers?: Headers): { id: string; type: string; data: Record<string, unknown> } | null;
 }

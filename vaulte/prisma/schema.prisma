@@ -855,6 +855,8 @@ model VerificationPerson {
   nameEntered        String?
   /// AML/PEP provider result (never raw national ID numbers)
   pepCheck           Json?
+  /// Contact and residential address, collected once and passed to licensed partners that onboard by API: {email, phone, phone_country_code, address:{line1,line2,city,state,postcode,country}}
+  contact            Json?
 
   caseId    String
   case      VerificationCase       @relation(fields: [caseId], references: [id], onDelete: Cascade)
@@ -1340,6 +1342,8 @@ model PartnerCustomer {
   /// INVITED | SUBMITTED | NEEDS_INFO | APPROVED | REJECTED
   status         String       @default("INVITED")
   note           String?
+  /// A step only the partner can complete (for example its hosted KYC or RFI form): the dashboard opens it for the customer
+  actionUrl      String?
   submittedAt    DateTime?
   decidedAt      DateTime?
   decidedBy      String?

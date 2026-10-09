@@ -303,6 +303,7 @@ export interface PersonInput {
   role: "APPLICANT" | "UBO" | "DIRECTOR" | "SIGNATORY";
   full_name: string; date_of_birth?: string; nationality?: string; country_of_residence?: string;
   ownership_pct?: number; is_pep?: boolean; pan?: string; id_type?: string;
+  contact?: { email?: string; phone?: string; phone_country_code?: string; address?: { line1: string; line2?: string; city: string; state?: string; postcode: string; country: string } };
 }
 
 export async function addPerson(c: FullCase, input: PersonInput) {
@@ -327,6 +328,7 @@ export async function addPerson(c: FullCase, input: PersonInput) {
       caseId: c.id, role: input.role, fullName: input.full_name.trim(), nameSource: "USER_ENTERED", dateOfBirth: input.date_of_birth ?? null,
       nationality: input.nationality?.toUpperCase() ?? null, countryOfResidence: input.country_of_residence?.toUpperCase() ?? null,
       ownershipPct: input.ownership_pct ?? null, isPep: !!input.is_pep, panEnc, panMasked, idType: input.id_type ?? null,
+      contact: input.contact ? (input.contact as Prisma.InputJsonValue) : undefined,
     },
   });
 }

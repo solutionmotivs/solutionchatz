@@ -3,7 +3,7 @@
 import { db } from "@/lib/db";
 import { log } from "@/lib/log";
 import { getPartner } from "@/lib/psp/stablecoin/registry";
-import type { CustomerPackage, PartnerCustomerResult } from "@/lib/psp/stablecoin/partner";
+import type { PackagePerson, CustomerPackage, PartnerCustomerResult } from "@/lib/psp/stablecoin/partner";
 import type { Route } from "@/lib/stablecoin/types";
 
 export const PARTNER_STATUSES = ["INVITED", "SUBMITTED", "NEEDS_INFO", "APPROVED", "REJECTED"] as const;
@@ -13,7 +13,7 @@ export const partnersOf = (route: Route) => Array.from(new Set(route.legs.map(l 
 
 async function packageFor(orgId: string): Promise<CustomerPackage> {
   const o = await db.organization.findUniqueOrThrow({ where: { id: orgId } });
-  const kyb = await db.verificationCase.findFirst({ where: { organizationId: orgId, subjectType: "ORGANIZATION", status: "APPROVED" }, orderBy: { decidedAt: "desc" }, select: { profile: true } });
+  const kyb = await db.verificationCase.findFirst({ where: { organizationId: orgId, subjectType: "ORGANIZATION", status: "APPROVED" }, orderBy: { decidedAt: "desc" }, select: { profile: true, people: true } });
   const prof = (kyb?.profile ?? {}) as Record<string, unknown>;
   const str = (k: string) => (typeof prof[k] === "string" && (prof[k] as string).trim() ? (prof[k] as string).trim() : null);
   const owner = await db.user.findFirst({ where: { organizationId: orgId, role: "OWNER" }, orderBy: { createdAt: "asc" }, select: { name: true, email: true, phone: true } });
@@ -22,9 +22,14 @@ async function packageFor(orgId: string): Promise<CustomerPackage> {
   const parts = address?.split(",").map(x => x.trim()).filter(Boolean) ?? [];
   return {
     organizationId: o.id, legalName: o.legalName ?? o.name, country: o.country ?? "", registrationNumber: o.registrationNumber, taxId: o.taxId, businessType: o.businessType, riskTier: o.riskTier, kybApprovedAt: o.kybApprovedAt?.toISOString() ?? null,
-    address, city: str("city") ?? (parts.length > 1 ? parts[parts.length - 1] : null), postalCode: str("postal_code"),
+    address, city: str("city") ?? (parts.length > 1 ? parts[parts.length - 1] : null), postalCode: str("postal_code"), state: str("state"),
     incorporationDate: o.incorporationDate?.toISOString() ?? str("incorporation_date"), industry: str("industry"), website: o.website ?? str("website"),
     expectedMonthlyUsd: typeof prof.expected_monthly_usd === "number" ? prof.expected_monthly_usd : null,
+    people: (kyb?.people ?? []).map(p => {
+      const [first, ...rest] = p.fullName.trim().split(/\s+/);
+      const c = (p.contact ?? {}) as { email?: string; phone?: string; phone_country_code?: string; address?: PackagePerson["address"] };
+      return { role: p.role as PackagePerson["role"], firstName: first, lastName: rest.join(" ") || first, dateOfBirth: p.dateOfBirth, nationality: p.nationality, ownershipPct: p.ownershipPct, email: c.email ?? null, phone: c.phone ?? null, phoneCountryCode: c.phone_country_code ?? null, address: c.address ?? null };
+    }),
     contact: owner ? { firstName: first || "Account", lastName: rest.join(" ") || "Owner", email: owner.email, phone: owner.phone ?? null } : undefined,
   };
 }
@@ -37,7 +42,7 @@ export async function customerRefFor(orgId: string, partnerId: string, sandbox: 
 
 function apply(res: PartnerCustomerResult) {
   const decided = res.status === "APPROVED" || res.status === "REJECTED";
-  return { partnerRef: res.partnerRef || null, status: res.status, note: res.note ?? null, ...(decided ? { decidedAt: new Date() } : {}) };
+  return { partnerRef: res.partnerRef || null, status: res.status, note: res.note ?? null, actionUrl: res.actionUrl ?? null, ...(decided ? { decidedAt: new Date() } : {}) };
 }
 
 /** Start (or return) the customer's onboarding at one partner. Idempotent; never downgrades an APPROVED customer. */
@@ -106,4 +111,18 @@ export async function requireApprovedPartners(orgId: string, route: Route, sandb
     const { ServiceError } = await import("@/lib/stablecoin/service");
     throw new ServiceError("PARTNER_ONBOARDING_PENDING", `The licensed partner has not yet approved your account for this route: ${pending.join(", ")}. Vaulte has sent your verified details; you will be notified when the partner decides.`, 409);
   }
+}
+
+/** A partner's webhook says a customer's onboarding status changed. The customer is never contacted by Vaulte separately: the dashboard shows the new state and the exact next step. */
+export async function applyCustomerStatusEvent(partnerId: string, d: { customer_ref: string; state: string; note?: string; action_url?: string }): Promise<boolean> {
+  const states = ["SUBMITTED", "NEEDS_INFO", "APPROVED", "REJECTED"];
+  if (!states.includes(d.state)) return false;
+  const rows = await db.partnerCustomer.findMany({ where: { partner: partnerId, partnerRef: { startsWith: d.customer_ref } } });
+  if (!rows.length) return false;
+  const decided = d.state === "APPROVED" || d.state === "REJECTED";
+  for (const r of rows) {
+    await db.partnerCustomer.update({ where: { id: r.id }, data: { status: d.state, note: d.note ?? r.note, actionUrl: d.state === "NEEDS_INFO" ? (d.action_url ?? r.actionUrl) : null, ...(decided ? { decidedAt: new Date() } : {}) } });
+    await db.auditLog.create({ data: { organizationId: r.organizationId, action: "partner_customer.status_event", resourceType: "PartnerCustomer", resourceId: r.id, metadata: { partner: partnerId, from: r.status, to: d.state } } });
+  }
+  return true;
 }
