@@ -63,14 +63,18 @@ export interface LiveLegs { legs: Leg[]; quotes: (FxQuote & { spreadBps: number 
 
 /**
  * Corridors touching India are excluded on purpose: inbound/outbound INR must go through RBI-authorised partners
- * (PA-CB / MTSS / AD bank), which are separate legs in the catalog.
+ * (PA-CB / MTSS / AD bank), which are separate legs in the catalog. The one opt-in: INDIA_FX_PROVIDERS="nium,..." lets the named
+ * providers quote INTO India (never out of it) once the operator has confirmed that provider is the RBI-authorised party for it.
  */
 export async function buildLiveLegs(a: LiveArgs): Promise<LiveLegs> {
   const none: LiveLegs = { legs: [], quotes: [], errors: [] };
   if (a.fundingMethod === "STABLECOIN") return none;
-  if (a.originCountry === "IN" || a.destCountry === "IN") return none;
+  if (a.originCountry === "IN") return none;
   if (a.sourceCurrency === a.destCurrency) return none;
-  const providers = (a.providers ?? fxProviders(a.sandbox ?? true)).filter(p => p.supports(a.sourceCurrency, a.destCurrency));
+  const indiaOk = (process.env.INDIA_FX_PROVIDERS ?? "").split(",").map(x => x.trim()).filter(Boolean);
+  const providers = (a.providers ?? fxProviders(a.sandbox ?? true))
+    .filter(p => p.supports(a.sourceCurrency, a.destCurrency))
+    .filter(p => a.destCountry !== "IN" || indiaOk.includes(p.id));
   if (!providers.length) return none;
 
   const settled = await Promise.allSettled(providers.map(p =>

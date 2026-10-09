@@ -187,6 +187,18 @@ describe("FX providers and aggregator", () => {
     expect((await buildLiveLegs(args({ fundingMethod: "STABLECOIN" }))).legs).toEqual([]);
     expect((await buildLiveLegs(args({ destCurrency: "USD" }))).legs).toEqual([]); // same currency
   });
+  it("INDIA_FX_PROVIDERS opens inbound INR to the named providers only, never outbound", async () => {
+    const inr: FxProvider = { id: "nium_like", supports: () => true, quote: async () => ({ provider: "nium_like", rate: 90, validUntil: new Date(Date.now() + 300_000), fixedFeeUsd: 0, feeBps: 0, rail: "IMPS", etaSec: 30, minUsd: 1, maxUsd: 1e6, jurisdiction: "US", country: "US" }) };
+    const other: FxProvider = { ...inr, id: "other" };
+    process.env.INDIA_FX_PROVIDERS = "nium_like";
+    try {
+      const open = await buildLiveLegs(args({ destCountry: "IN", destCurrency: "INR", providers: [inr, other] }));
+      expect(open.legs.map(l => l.partner)).toEqual(["nium_like"]);
+      expect((await buildLiveLegs(args({ originCountry: "IN", sourceCurrency: "INR", providers: [inr] }))).legs).toEqual([]);
+      expect((await buildLiveLegs(args({ destCountry: "IN", destCurrency: "INR", fundingMethod: "STABLECOIN", providers: [inr] }))).legs).toEqual([]);
+    } finally { delete process.env.INDIA_FX_PROVIDERS; }
+    expect((await buildLiveLegs(args({ destCountry: "IN", destCurrency: "INR", providers: [inr] }))).legs).toEqual([]);
+  });
   it("direct legs are not used when funding with stablecoin", () => {
     const routes = findRoutes({ kind: "BUSINESS", originCountry: "US", destCountry: "US", sourceCurrency: "USD", destCurrency: "USD", amountUsd: 1000, fundingMethod: "STABLECOIN" });
     expect(routes.every(r => r.legs.every(l => l.kind !== "DIRECT"))).toBe(true);
