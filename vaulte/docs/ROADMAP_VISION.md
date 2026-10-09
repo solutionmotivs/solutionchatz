@@ -14,14 +14,14 @@ Dates are working estimates for one engineer, not promises. "Unverified" means b
 | Sanctions: OFAC, UN, UK lists daily; wallet screening (TRM free sanctions check live) | built, live |
 | Ledger, statements, ERP exports, invoices, payment links, escrow via partner, certificates | built |
 | Currencycloud demo: quotes, customer sub-account with its own funding accounts, deposit, convert, payout | **proven on the demo** |
-| Nium: key works, sandbox FX rate returned (USD>INR 96.79, EUR>INR 108.66, USD>AED 3.6726) | key verified; adapter not built; needs `clientHashId` |
+| Nium sandbox: FX provider, corporate customer onboarding (decision by webhook), customer virtual account, payout request to an Indian bank by IFSC | **built and proven on the sandbox up to the payout**; the payout waits for wallet funds (a simulated third-party credit stays pending); live on the sandbox site: USD>INR quotes use Nium's rate (`INDIA_FX_PROVIDERS=nium`) |
 | Circle: the key you sent is a **Circle Console** key (programmable wallets: `/v1/w3s/...` answers, appId returned, 0 wallets). It is **not** a Circle Mint key (`api-sandbox.circle.com` answers 401) and CPN endpoints are not enabled for it | key stored; see section 4 |
 | Two environments: production `vaulte.iaexnetwork.com`, sandbox `vaulte-sandbox.iaexnetwork.com`, legal pack for 5 regions | live |
 
 ## 2. What is not built yet (the real remaining work), in build order
 | # | Work | Why it matters | Needs from you | Effort |
 |---|---|---|---|---|
-| 1 | **Nium adapter**: FX quotes, beneficiaries, payouts, customer onboarding, webhooks | one partner that trades INR, AED and many currencies; covers the India leg and UAE | `clientHashId`, region, webhook secret, sandbox IP allowlist if asked | 3 to 4 days |
+| 1 | **Nium: finish** (adapter is built): ask Nium how sandbox credits settle, no-prefund model, webhook key, UPI, document upload; confirm in writing that its Indian entity is the authorised party before `INDIA_FX_PROVIDERS` is used live | the India and UAE leg | Nium account manager | 1 to 2 days after their answers |
 | 2 | **Partner KYC by webhook** (section 5): customer.approved / needs_info / rejected events into `PartnerCustomer`, requests shown inside Vaulte | the "never contact the customer separately" rule | none (code) | 2 days |
 | 3 | **Cashfree** (Payouts + Cross-border/Global Collections) and **Razorpay** (cross-border PA-CB) adapters | the INR landing leg with UPI/IMPS and eFIRA, as the second and third India option | sandbox keys for each; business account in your name | 4 days each |
 | 4 | **Stablecoin leg done properly**: Circle Mint (or Bridge) for USDC/EURC deposit addresses held by the licensed partner, off-ramp to USD/EUR, webhooks | the "USDC to USD/EUR to INR without SWIFT" flow | a **Circle Mint** sandbox key (apply at circle.com/mint) or a Bridge sandbox key | 3 days |
