@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import QRCode from "qrcode";
 import { resolvePayId } from "@/lib/pay-address-public";
 import { COMPANY } from "@/lib/legal";
@@ -9,12 +10,7 @@ const LABEL: Record<string, string> = { iban: "IBAN", sort_code: "Sort code", ac
 
 export default async function PayIdPage({ params }: { params: { handle: string } }) {
   const r = await resolvePayId(params.handle).catch(() => null);
-  if (!r) {
-    return (
-      <main className="min-h-screen bg-paper px-6 py-16 font-mono"><div className="max-w-xl mx-auto"><Link href="/" className="text-[10px] uppercase tracking-widest text-mist">← Vaulte</Link>
-        <h1 className="font-serif text-3xl text-ink mt-6">No active Pay ID</h1><p className="text-[12px] text-slate mt-3">This address does not exist or has been switched off. Ask the person you are paying to check it.</p></div></main>
-    );
-  }
+  if (!r) notFound(); // 404 with the message in not-found.tsx
   const url = `${COMPANY.siteUrl.replace(/\/$/, "")}/id/${r.handle}`;
   const qr = await QRCode.toString(url, { type: "svg", margin: 1, width: 160 });
   return (

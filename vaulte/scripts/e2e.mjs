@@ -1513,7 +1513,8 @@ async function main() {
   check("the public lookup shows the verified name and the receiving accounts, nothing else", pub.status === 200 && pub.json.name && pub.json.accounts.some(a => a.currency === "EUR" && a.details.iban) && !JSON.stringify(pub.json).includes("organization"), JSON.stringify(pub.json).slice(0, 300));
   const idPage = await fetch(`${BASE}/id/${hid}`); const idHtml = await idPage.text();
   check("the public page renders the name, the handle and a QR code", idPage.status === 200 && idHtml.includes(`${hid}@vaulte`) && /<svg/.test(idHtml));
-  check("an unknown handle is a 404 and the page says so", (await api("/api/public/id/nobodyhere1")).status === 404 && /No active Pay ID/.test(await (await fetch(`${BASE}/id/nobodyhere1`)).text()));
+  const idMissing = await fetch(`${BASE}/id/nobodyhere1`);
+  check("an unknown handle is a 404 on the API and on the page, and the page says so", (await api("/api/public/id/nobodyhere1")).status === 404 && idMissing.status === 404 && /No active Pay ID/.test(await idMissing.text()));
   const off = await api(`/api/pay-addresses/${pid.json.id}`, { method: "PATCH", key: A.key, body: { status: "DISABLED" } });
   check("switching it off hides it publicly", off.status === 200 && (await api(`/api/public/id/${hid}`)).status === 404);
   check("another account cannot see or change it", (await api(`/api/pay-addresses/${pid.json.id}`, { method: "PATCH", key: B.key, body: { status: "ACTIVE" } })).status === 404);
