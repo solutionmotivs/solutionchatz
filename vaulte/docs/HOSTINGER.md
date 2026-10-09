@@ -31,3 +31,16 @@ Upload a `git archive` tarball to the site (TUS upload), then `Start Node.js bui
 
 ## Checks after deploy
 `/api/health/ready` all green, `/quote`, `/pilot`, register with an emailed code, security headers, sanctions lists loaded (`POST /api/internal/sanctions/sync?list=OFAC_SDN` etc. with the cron secret), then `BASE_URL=https://vaulte.iaexnetwork.com node scripts/preflight.mjs` (it will still list the live-money blockers by design).
+
+## Two environments (set up 2026-10-08)
+| | **Production** `https://vaulte.iaexnetwork.com` | **Sandbox** `https://vaulte-sandbox.iaexnetwork.com` |
+|---|---|---|
+| Purpose | the real service; no live partner is configured yet, so no live money | developer and customer testing with fake money |
+| Mode | `DEMO_MODE` off; emailed one-time codes via Resend; encrypted S3 documents; manual KYC review | `DEMO_MODE=true` (banner on every page, mock KYC, login code shown on screen), no email key |
+| Database | Neon database `neondb` | Neon database `vaulte_sandbox` (same project, separate data) |
+| Documents | bucket `vaulte-documents` | bucket `vaulte-sandbox-documents` |
+| Secrets | its own | its own, generated separately; nothing is shared except the Neon project and company details |
+| Partners | none live; add live partner keys only here, after contracts and counsel sign-off | partner sandboxes only: Currencycloud demo now (`CURRENCYCLOUD_ENV=demo`), Airwallex sandbox when the keys arrive |
+| Links | `NEXT_PUBLIC_SANDBOX_URL` adds a "Developer sandbox" link to the footer | `PRODUCTION_URL` adds a link to the live site in the banner |
+Rules: never put a live partner key in the sandbox, never a sandbox key in production, never point both at one database. Each environment has its own Hostinger cron jobs with its own `CRON_SECRET`. To add the next partner sandbox, set its variables in the sandbox environment only (the env API replaces the whole set; resend every variable) and redeploy.
+The health endpoint installs the ledger triggers on a fresh database when `LEDGER_GUARDS_AUTOINSTALL=true`, so a new environment turns green on its first `/api/health/ready` call.
