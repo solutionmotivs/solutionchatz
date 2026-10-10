@@ -30,7 +30,7 @@ export interface CashfreeTransfer {
 
 export class CashfreeClient {
   constructor(private cfg: CashfreeConfig) {}
-  get isSandbox() { return /sandbox/.test(this.cfg.baseUrl); }
+  get isSandbox() { return /sandbox|gamma/.test(this.cfg.baseUrl); }
   get clientSecret() { return this.cfg.clientSecret; }
   get signs() { return !!this.cfg.publicKeyPem; }
 
@@ -43,12 +43,14 @@ export class CashfreeClient {
 
   async call<T = any>(method: "GET" | "POST" | "PUT", path: string, body?: unknown, query?: Record<string, string | number | undefined>, requestId?: string): Promise<T> {
     const qs = query ? "?" + new URLSearchParams(Object.entries(query).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])).toString() : "";
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < (this.isSandbox ? 8 : 3); attempt++) {
       const headers: Record<string, string> = { "x-client-id": this.cfg.clientId, "x-client-secret": this.cfg.clientSecret, "x-api-version": this.cfg.apiVersion, "x-request-id": requestId ?? randomUUID() };
       const sig = this.signature(); if (sig) headers["x-cf-signature"] = sig;
       const r = await http(`${this.cfg.baseUrl}${path}${qs}`, { method, headers, json: body, timeoutMs: 30_000 });
       if (r.status >= 200 && r.status < 300) return r.json as T;
       // Retry only where repeating is safe: a transient gateway error or throttling. A POST /transfers carries our transfer_id, so Cashfree rejects a duplicate rather than paying twice.
+      // The sandbox gateway answers "IP not whitelisted" at random when our outbound IP rotates (this build container, shared hosting); it is refused before anything is processed, so repeating is safe.
+      if (this.isSandbox && r.status === 403 && /IP not whitelisted/i.test(r.json?.message ?? "") && attempt < 7) { await new Promise(res => setTimeout(res, 300)); continue; }
       if ((r.status >= 502 || r.status === 429) && attempt < 2) { await new Promise(res => setTimeout(res, 500 * (attempt + 1))); continue; }
       const j = r.json ?? {};
       throw new PartnerError(r.status, String(j.code || j.type || `HTTP_${r.status}`), `Cashfree ${method} ${path} failed: ${j.message ?? r.status}${j.type ? ` (${j.type})` : ""}`);
@@ -75,7 +77,7 @@ export function cashfreeFromEnv(env = process.env): CashfreeClient | null {
   if (!env.CASHFREE_CLIENT_ID || !env.CASHFREE_CLIENT_SECRET) return null;
   const live = env.CASHFREE_ENV === "production" || env.CASHFREE_ENV === "live";
   return new CashfreeClient({
-    baseUrl: env.CASHFREE_BASE_URL ?? (live ? "https://api.cashfree.com/payout" : "https://sandbox.cashfree.com/payout"),
+    baseUrl: env.CASHFREE_BASE_URL ?? (live ? "https://api.cashfree.com/payout" : "https://payout-gamma.cashfree.com/payout"),
     clientId: env.CASHFREE_CLIENT_ID, clientSecret: env.CASHFREE_CLIENT_SECRET, apiVersion: env.CASHFREE_API_VERSION ?? "2024-01-01",
     publicKeyPem: env.CASHFREE_PUBLIC_KEY ? pem(env.CASHFREE_PUBLIC_KEY) || undefined : undefined,
   });
