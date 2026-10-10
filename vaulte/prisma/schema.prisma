@@ -1,0 +1,1400 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PaymentStatus {
+  DRAFT
+  PENDING_COMPLIANCE
+  COMPLIANCE_CLEARED
+  PROCESSING
+  SETTLED
+  FAILED
+  CANCELLED
+  RECALLED
+}
+
+enum PaymentRail {
+  SWIFT_GPI
+  SEPA_INSTANT
+  SEPA_CREDIT
+  ACH_SAME_DAY
+  ACH_STANDARD
+  FEDNOW
+  UPI
+  RTGS
+  NEFT
+  AUTO
+}
+
+enum KYBStatus {
+  NOT_STARTED
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  NEEDS_MORE_INFO
+}
+
+enum RiskTier {
+  LOW
+  MEDIUM
+  HIGH
+  BLOCKED
+}
+
+enum InvoiceKind {
+  INVOICE
+  PROFORMA
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum WebhookEventType {
+  PAYMENT_CREATED
+  PAYMENT_SETTLED
+  PAYMENT_FAILED
+  PAYMENT_CANCELLED
+  INVOICE_CREATED
+  INVOICE_PAID
+  KYB_APPROVED
+  KYB_REJECTED
+  KYB_NEEDS_INFO
+  KYC_APPROVED
+  KYC_REJECTED
+  KYC_NEEDS_INFO
+  DOCUMENT_RECEIVED
+  DOCUMENT_VERIFIED
+  LEDGER_JOURNAL_POSTED
+  ERP_SYNC_FAILED
+  ERP_SYNC_COMPLETED
+  COMPLIANCE_FLAGGED
+  FX_RATE_UPDATED
+  TRANSFER_CREATED
+  TRANSFER_FUNDED
+  TRANSFER_COMPLETED
+  TRANSFER_FAILED
+  VIRTUAL_ACCOUNT_CREDITED
+  DOCUMENT_REQUESTED
+  ESCROW_DEAL_CREATED
+  ESCROW_DEAL_ACCEPTED
+  ESCROW_MILESTONE_RELEASED
+  ESCROW_DISPUTE_OPENED
+  ESCROW_DEAL_COMPLETED
+}
+
+enum TransferKind {
+  BUSINESS
+  PERSONAL
+}
+
+enum FundingMethod {
+  STABLECOIN
+  FIAT_LOCAL
+  VIRTUAL_ACCOUNT
+}
+
+enum TransferStatus {
+  PENDING_VERIFICATION
+  AWAITING_FUNDS
+  FUNDS_DETECTED
+  PAYING_OUT
+  COMPLETED
+  FAILED
+  EXPIRED
+  CANCELLED
+  QUARANTINED
+}
+
+enum DepositStatus {
+  AWAITING
+  DETECTED
+  CONFIRMED
+  UNDERPAID
+  EXPIRED
+}
+
+enum QuoteStatus {
+  ACTIVE
+  USED
+  EXPIRED
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  FINANCE
+  DEVELOPER
+  READ_ONLY
+}
+
+enum OnboardingStep {
+  COMPANY_DETAILS
+  ADD_ENTITY
+  FIRST_PAYMENT
+  KYB_SUBMIT
+  GO_LIVE
+}
+
+enum PlanId {
+  FREE
+  GROWTH
+  SCALE
+  ENTERPRISE
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  name    String
+  slug    String  @unique
+  logoUrl String?
+
+  legalName          String?
+  registrationNumber String?
+  taxId              String?
+  country            String?
+  businessType       String?
+  incorporationDate  DateTime?
+  website            String?
+  kybStatus          KYBStatus @default(NOT_STARTED)
+  kybSubmittedAt     DateTime?
+  kybApprovedAt      DateTime?
+  riskTier           RiskTier  @default(MEDIUM)
+  riskScore          Int?
+
+  dailyLimitUsd   BigInt @default(10000000)
+  monthlyLimitUsd BigInt @default(500000000)
+
+  partnerCustomers PartnerCustomer[]
+  payAddresses     PayAddress[]
+
+  planId        PlanId    @default(FREE)
+  planExpiresAt DateTime?
+
+  sandboxEnabled        Boolean        @default(true)
+  onboardingStep        OnboardingStep @default(COMPANY_DETAILS)
+  onboardingDone        Boolean        @default(false)
+  poweredByEnabled      Boolean        @default(true)
+  currentMonthVolumeUsd BigInt         @default(0)
+  volumeResetAt         DateTime?
+
+  users             User[]
+  entities          Entity[]
+  apiKeys           ApiKey[]
+  payments          Payment[]
+  invoices          Invoice[]
+  webhooks          WebhookEndpoint[]
+  auditLogs         AuditLog[]
+  transfers         Transfer[]
+  quotes            Quote[]
+  virtualAccounts   VirtualAccount[]
+  accountType       String             @default("BUSINESS") // BUSINESS (KYB) | INDIVIDUAL (KYC)
+  invites           Invite[]
+  verificationCases VerificationCase[]
+
+  @@index([slug])
+  @@index([kybStatus])
+}
+
+model User {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  email        String    @unique
+  passwordHash String
+  name         String
+  role         UserRole  @default(FINANCE)
+  lastLoginAt  DateTime?
+  mfaEnabled   Boolean   @default(false)
+  mfaSecret    String?
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  sessions          Session[]
+  auditLogs         AuditLog[]
+  // ── Identity (M1) ──
+  emailVerifiedAt   DateTime?
+  status            String     @default("ACTIVE") // ACTIVE | SUSPENDED
+  isStaff           Boolean    @default(false)
+  phone             String?
+  jobTitle          String?
+  timezone          String     @default("UTC")
+  locale            String     @default("en")
+  failedLoginCount  Int        @default(0)
+  lockedUntil       DateTime?
+  passwordChangedAt DateTime?
+  mfaRecoveryHashes String[]   @default([])
+  mfaLastStep       Int        @default(0)
+  termsAcceptedAt   DateTime?
+  termsVersion      String?
+  marketingOptIn    Boolean    @default(false)
+
+  @@index([email])
+  @@index([organizationId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  userAgent String?
+  ipAddress String?
+
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  revokedAt  DateTime?
+  lastSeenAt DateTime?
+  method     String    @default("PASSWORD") // PASSWORD | EMAIL_OTP | INVITE | SIGNUP
+  mfa        Boolean   @default(false)
+
+  @@index([userId])
+}
+
+model Entity {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  legalName      String
+  country        String
+  currency       String
+  registrationNo String?
+  taxId          String?
+  isVerified     Boolean @default(false)
+  isSandbox      Boolean @default(false)
+
+  // BUSINESS (KYB) or INDIVIDUAL (KYC). Verification itself is done by the licensed partner;
+  // Vaulte only stores the resulting status.
+  entityType         String    @default("BUSINESS")
+  verificationStatus KYBStatus @default(NOT_STARTED)
+  verificationRef    String?
+  // Set from the partner's KYC result (needed for LRS). Vaulte never stores the PAN itself.
+  panVerified        Boolean   @default(false)
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  bankAccounts      BankAccount[]
+  virtualAccounts   VirtualAccount[]
+  sentTransfers     Transfer[]         @relation("TransferSender")
+  receivedTransfers Transfer[]         @relation("TransferRecipient")
+  sentPayments      Payment[]          @relation("SenderEntity")
+  receivedPayments  Payment[]          @relation("RecipientEntity")
+  verificationCases VerificationCase[]
+  /// CLEAR | REVIEW (possible sanctions match, transfers held) | BLOCKED (confirmed)
+  screeningStatus   String             @default("CLEAR")
+
+  @@index([organizationId])
+  payAddress PayAddress?
+}
+
+model BankAccount {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  alias       String?
+  accountName String
+  currency    String
+  country     String
+
+  iban          String?
+  swiftBic      String?
+  accountNumber String?
+  routingNumber String?
+  sortCode      String?
+  ifsc          String?
+  upiId         String?
+
+  isVerified Boolean   @default(false)
+  verifiedAt DateTime?
+  isSandbox  Boolean   @default(false)
+
+  entityId String
+  entity   Entity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+
+  payments Payment[]
+
+  @@index([entityId])
+}
+
+model Payment {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  amount     BigInt
+  amountUsd  BigInt?
+  currency   String
+  fxRate     Float?  @default(1.0)
+  feeAmount  BigInt?
+  networkFee BigInt?
+
+  rail         PaymentRail   @default(AUTO)
+  railSelected PaymentRail?
+  status       PaymentStatus @default(DRAFT)
+  isSandbox    Boolean       @default(false)
+
+  invoiceId      String?
+  idempotencyKey String? @unique
+  externalRef    String?
+  description    String?
+  metadata       Json?
+
+  complianceCleared Boolean @default(false)
+  sanctionsHit      Boolean @default(false)
+  complianceNotes   String?
+
+  processedAt      DateTime?
+  settledAt        DateTime?
+  failedAt         DateTime?
+  cancelledAt      DateTime?
+  estimatedArrival DateTime?
+
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id])
+  senderEntityId    String
+  senderEntity      Entity       @relation("SenderEntity", fields: [senderEntityId], references: [id])
+  recipientEntityId String
+  recipientEntity   Entity       @relation("RecipientEntity", fields: [recipientEntityId], references: [id])
+  bankAccountId     String?
+  bankAccount       BankAccount? @relation(fields: [bankAccountId], references: [id])
+  invoice           Invoice?     @relation(fields: [invoiceId], references: [id])
+
+  webhookEvents WebhookEvent[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([idempotencyKey])
+}
+
+model Invoice {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  number      String
+  publicToken String        @unique @default(cuid())
+  status      InvoiceStatus @default(DRAFT)
+  currency    String
+  subtotal    BigInt
+  taxAmount   BigInt        @default(0)
+  totalAmount BigInt
+  dueDate     DateTime?
+  paidAt      DateTime?
+  // RBI purpose code (e.g. P0802) when the invoice is an India export of services
+  purposeCode String?
+  notes       String?
+
+  recipientEmail String?
+  recipientName  String?
+  emailSentAt    DateTime?
+  viewCount      Int       @default(0)
+
+  /// INVOICE or PROFORMA (an estimate that can still be paid as an advance; converting it issues a numbered invoice).
+  kind         InvoiceKind @default(INVOICE)
+  payerAddress String?
+  payerTaxId   String?
+  /// Buyer's purchase-order number or the merchant's own order id (echoed in webhooks).
+  reference    String?
+  proformaOfId String?
+  /// Hosted-checkout return links (https only) and the merchant's own reference.
+  successUrl   String?
+  cancelUrl    String?
+  /// DASHBOARD | API | PAYMENT_LINK | CHECKOUT
+  source       String      @default("DASHBOARD")
+
+  issuerEntityId String?
+  payerEntityId  String?
+
+  lineItems InvoiceLineItem[]
+  payments  Payment[]
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, number])
+  @@index([organizationId])
+  @@index([status])
+  @@index([publicToken])
+}
+
+model InvoiceLineItem {
+  id          String  @id @default(cuid())
+  description String
+  quantity    Float
+  unitPrice   BigInt
+  taxRate     Float   @default(0)
+  total       BigInt
+  /// HS code (digits) for goods, validated against HS 2022
+  hsCode      String?
+
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+}
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+
+  name      String
+  keyHash   String   @unique
+  keyPrefix String
+  isLive    Boolean  @default(false)
+  scopes    String[] @default(["payments:read", "payments:write"])
+  rateLimit Int      @default(2000)
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+model WebhookEndpoint {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  url           String
+  secret        String
+  events        String[]
+  isActive      Boolean   @default(true)
+  failureCount  Int       @default(0)
+  lastAttemptAt DateTime?
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  deliveries WebhookEvent[]
+
+  @@index([organizationId])
+}
+
+model WebhookEvent {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  eventType     WebhookEventType
+  payload       Json
+  attempts      Int              @default(0)
+  delivered     Boolean          @default(false)
+  deliveredAt   DateTime?
+  lastError     String?
+  nextAttemptAt DateTime?
+
+  endpointId String
+  endpoint   WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  paymentId  String?
+  payment    Payment?        @relation(fields: [paymentId], references: [id])
+
+  @@index([endpointId])
+  @@index([delivered, nextAttemptAt])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  action       String
+  resourceType String?
+  resourceId   String?
+  metadata     Json?
+  ipAddress    String?
+  userAgent    String?
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  userId         String?
+  user           User?        @relation(fields: [userId], references: [id])
+
+  @@index([organizationId])
+  @@index([createdAt])
+}
+
+model FxRate {
+  id        String   @id @default(cuid())
+  updatedAt DateTime @updatedAt
+
+  base     String
+  target   String
+  midRate  Float
+  buyRate  Float
+  sellRate Float
+  source   String @default("openexchangerates")
+
+  @@unique([base, target])
+  @@index([base])
+}
+
+model EmailLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  to         String
+  subject    String
+  template   String
+  status     String  @default("sent")
+  externalId String?
+
+  organizationId String?
+
+  @@index([organizationId])
+  @@index([to])
+}
+
+// ─── CROSS-BORDER TRANSFERS (stablecoin / fiat, partner-held funds) ───────────────
+// Vaulte never holds funds. Everything below is routing metadata and a memo ledger.
+
+model Quote {
+  id        String      @id @default(cuid())
+  createdAt DateTime    @default(now())
+  expiresAt DateTime
+  status    QuoteStatus @default(ACTIVE)
+
+  kind              TransferKind
+  senderEntityId    String
+  recipientEntityId String
+  originCountry     String
+  destCountry       String
+  sourceCurrency    String
+  destCurrency      String
+  sourceAmount      BigInt // minor units
+  destAmount        BigInt // minor units, firm for the quote TTL
+  fundingMethod     FundingMethod
+  prefer            String        @default("balanced")
+
+  route      Json // chosen route legs
+  alternates Json // ranked fallback routes
+  breakdown  Json // landed-cost split: mid rate, partner spread, network fee, Vaulte markup
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  transfers      Transfer[]
+
+  @@index([organizationId])
+  @@index([status, expiresAt])
+}
+
+model Transfer {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  kind          TransferKind
+  status        TransferStatus @default(AWAITING_FUNDS)
+  statusReason  String?
+  fundingMethod FundingMethod
+  isSandbox     Boolean        @default(true)
+
+  originCountry   String
+  destCountry     String
+  sourceCurrency  String
+  destCurrency    String
+  sourceAmount    BigInt
+  destAmount      BigInt
+  sourceAmountUsd BigInt // valuation in USD cents, used by the memo ledger and limits
+  markupBps       Int
+  markupUsd       BigInt // Vaulte markup in USD cents
+  partnerCostUsd  BigInt // partner fees + spread in USD cents
+
+  token               String? // USDC | USDT when stablecoin is used
+  chain               String?
+  route               Json
+  alternates          Json
+  routeIndex          Int     @default(0)
+  // How the sender pays: stablecoin deposit address or partner bank details, issued by the partner.
+  fundingInstructions Json?
+  // Total fee shown to the customer at quote time (USD cents); fixed even if routing fails over.
+  quotedFeesUsd       BigInt  @default(0)
+
+  purposeCode    String?
+  invoiceId      String?
+  idempotencyKey String?   @unique
+  externalRef    String?
+  efiraRef       String?
+  description    String?
+  completedAt    DateTime?
+  /// When the partner confirmed the sender's money (start of the settlement clock we measure)
+  fundedAt       DateTime?
+  /// When we last looked for this transfer's certificates (eFIRA/eBRC) at the partner, and which sources answered
+  certCheckedAt  DateTime?
+  certCheckNote  String?
+
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id])
+  quoteId           String
+  quote             Quote        @relation(fields: [quoteId], references: [id])
+  senderEntityId    String
+  sender            Entity       @relation("TransferSender", fields: [senderEntityId], references: [id])
+  recipientEntityId String
+  recipient         Entity       @relation("TransferRecipient", fields: [recipientEntityId], references: [id])
+
+  deposits StablecoinDeposit[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([recipientEntityId, createdAt])
+  @@index([senderEntityId, createdAt])
+}
+
+model StablecoinDeposit {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  partner        String
+  partnerRef     String?
+  token          String
+  chain          String
+  address        String        @unique
+  expectedAmount BigInt // token minor units (6 decimals for USDC/USDT)
+  receivedAmount BigInt?
+  txHash         String?
+  confirmations  Int           @default(0)
+  status         DepositStatus @default(AWAITING)
+  expiresAt      DateTime
+
+  transferId String
+  transfer   Transfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+
+  @@index([transferId])
+  @@index([status])
+}
+
+model VirtualAccount {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  partner        String
+  partnerRef     String
+  country        String
+  currency       String
+  details        Json // local bank details issued by the partner (IBAN, sort code, ACH, ...)
+  status         String  @default("ACTIVE")
+  // AUTO_SWEEP: every credit immediately triggers a transfer; no balance is retained.
+  sweepRule      Json
+  collectionOnly Boolean @default(true)
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  entityId       String
+  entity         Entity       @relation(fields: [entityId], references: [id])
+
+  @@unique([partner, partnerRef])
+  @@unique([entityId, country, currency])
+  @@index([organizationId])
+}
+
+model PartnerEvent {
+  id          String    @id @default(cuid())
+  createdAt   DateTime  @default(now())
+  partner     String
+  externalId  String
+  type        String
+  payload     Json
+  processedAt DateTime?
+  error       String?
+
+  @@unique([partner, externalId])
+}
+
+// ─── IDENTITY: one-time codes, rate limits, invites ───────────────────────────────
+
+model OtpChallenge {
+  id          String    @id @default(cuid())
+  createdAt   DateTime  @default(now())
+  purpose     String // SIGNUP_VERIFY | LOGIN | PASSWORD_RESET | EMAIL_CHANGE | INVITE_ACCEPT
+  email       String // the address the code was sent to (lower case)
+  userId      String?
+  codeHash    String
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  ip          String?
+  payload     Json?
+
+  @@index([email, purpose, createdAt])
+  @@index([expiresAt])
+}
+
+// Atomic fixed-window counters for auth and other abuse-sensitive endpoints (shared across instances).
+model RateLimit {
+  key     String   @id
+  count   Int      @default(0)
+  resetAt DateTime
+}
+
+model Invite {
+  id              String    @id @default(cuid())
+  createdAt       DateTime  @default(now())
+  email           String
+  role            UserRole  @default(FINANCE)
+  tokenHash       String    @unique
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  invitedByUserId String
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([email])
+}
+
+enum VerificationCaseStatus {
+  DRAFT
+  SUBMITTED
+  IN_REVIEW
+  NEEDS_INFO
+  APPROVED
+  REJECTED
+}
+
+enum VerificationTier {
+  SDD
+  CDD
+  EDD
+}
+
+// One KYC (individual) or KYB (business) file for the account holder or for a sender/recipient entity.
+// Vaulte collects and organises evidence; verification is performed by providers/partners and staff.
+model VerificationCase {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  kind        String // KYB | KYC
+  subjectType String // ORGANIZATION | ENTITY
+  country     String
+  purposes    String[]
+  status      VerificationCaseStatus @default(DRAFT)
+  tier        VerificationTier?
+  riskScore   Int?
+  riskFactors Json?
+  screening   Json?
+  profile     Json                   @default("{}")
+
+  submittedAt  DateTime?
+  decidedAt    DateTime?
+  decidedById  String?
+  decisionNote String?
+  /// Staff who approved so far (EDD needs two different people).
+  approvals    Json      @default("[]")
+  nextReviewAt DateTime?
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  entityId       String?
+  entity         Entity?      @relation(fields: [entityId], references: [id], onDelete: Cascade)
+
+  items     VerificationItem[]
+  people    VerificationPerson[]
+  documents VerificationDocument[]
+
+  @@index([organizationId])
+  @@index([entityId])
+  @@index([status])
+}
+
+model VerificationItem {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  code        String
+  valueEnc    String
+  valueMasked String
+  valueHash   String
+  status      String    @default("PENDING") // PENDING | VERIFIED | FAILED | MANUAL
+  provider    String?
+  providerRef String?
+  result      Json?
+  verifiedAt  DateTime?
+
+  caseId String
+  case   VerificationCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@unique([caseId, code])
+}
+
+model VerificationPerson {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  role               String // APPLICANT | UBO | DIRECTOR | SIGNATORY
+  fullName           String
+  dateOfBirth        String?
+  nationality        String?
+  countryOfResidence String?
+  ownershipPct       Float?
+  isPep              Boolean @default(false)
+  panEnc             String?
+  panMasked          String?
+  panStatus          String?
+  idType             String?
+  idMasked           String?
+  screening          Json?
+  /// Where fullName came from: OCR | CKYC | REGISTRY | STAFF | USER_ENTERED_LEGACY
+  nameSource         String?
+  /// What the applicant typed before the document replaced it (kept for the reviewer)
+  nameEntered        String?
+  /// AML/PEP provider result (never raw national ID numbers)
+  pepCheck           Json?
+  /// Contact and residential address, collected once and passed to licensed partners that onboard by API: {email, phone, phone_country_code, address:{line1,line2,city,state,postcode,country}}
+  contact            Json?
+
+  caseId    String
+  case      VerificationCase       @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  documents VerificationDocument[]
+
+  @@index([caseId])
+}
+
+model VerificationDocument {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  type         String
+  filename     String
+  mime         String
+  size         Int
+  sha256       String
+  storageKey   String
+  status       String  @default("UPLOADED") // UPLOADED | ACCEPTED | REJECTED
+  rejectReason String?
+  uploadedById String?
+  /// Fields read from the document by OCR (name, date of birth, ID number, expiry) plus an image-quality verdict. Names come from here, not from typing.
+  ocr          Json?
+
+  caseId   String
+  case     VerificationCase    @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  personId String?
+  person   VerificationPerson? @relation(fields: [personId], references: [id], onDelete: SetNull)
+
+  @@index([caseId])
+}
+
+// ── Sanctions screening (official lists mirrored locally; refreshed by the sync job) ──
+model SanctionsList {
+  code         String   @id // OFAC_SDN | UN | UK
+  version      String?
+  entryCount   Int      @default(0)
+  addressCount Int      @default(0)
+  fetchedAt    DateTime @default(now())
+  sourceUrl    String?
+  status       String   @default("OK")
+  error        String?
+}
+
+model SanctionsEntry {
+  id         String   @id @default(cuid())
+  list       String
+  externalId String
+  kind       String // INDIVIDUAL | ENTITY | VESSEL | OTHER
+  name       String
+  aliases    String[]
+  normNames  String[]
+  birthYears Int[]
+  countries  String[]
+  programs   String[]
+
+  addresses SanctionsAddress[]
+
+  @@unique([list, externalId])
+  @@index([list])
+}
+
+model SanctionsAddress {
+  id      String         @id @default(cuid())
+  list    String
+  asset   String
+  address String
+  addrKey String
+  entryId String
+  entry   SanctionsEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@index([addrKey])
+  @@index([list])
+}
+
+model ScreeningCheck {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  organizationId String?
+  subjectType    String // CASE_SUBJECT | CASE_PERSON | ENTITY | TRANSFER_PARTY | WALLET | VA_PAYER | RESCREEN
+  subjectId      String?
+  query          Json
+  result         String // CLEAR | REVIEW | BLOCK
+  topScore       Int     @default(0)
+  matches        Json
+  listVersions   Json
+
+  /// Alerts only (result != CLEAR): OPEN | CLEARED | CONFIRMED
+  status      String?
+  note        String?
+  decidedById String?
+  decidedAt   DateTime?
+
+  @@index([status, result])
+  @@index([organizationId])
+  @@index([subjectType, subjectId])
+}
+
+// ── General ledger (double-entry, multi-currency, append-only) ──
+// Debits are positive, credits negative. Each journal balances per currency AND in USD (base). Rows can never be
+// updated or deleted (database triggers); corrections are new reversing journals. Journals are hash-chained.
+model GlAccount {
+  id            String    @id @default(cuid())
+  createdAt     DateTime  @default(now())
+  code          String    @unique
+  name          String
+  /// ASSET | LIABILITY | EQUITY | REVENUE | EXPENSE
+  type          String
+  /// DEBIT | CREDIT
+  normalBalance String
+  /// Reporting class, e.g. CURRENT_ASSET, CURRENT_LIABILITY, OPERATING_REVENUE, COST_OF_REVENUE, OPERATING_EXPENSE, MEMO_CUSTODY
+  class         String
+  /// Memorandum accounts track customer money held by partners. They are NOT Vaulte's assets or liabilities and stay off the balance sheet.
+  isMemo        Boolean   @default(false)
+  active        Boolean   @default(true)
+  description   String?
+  entries       GlEntry[]
+}
+
+model GlPeriod {
+  id           String      @id // YYYY-MM
+  startsOn     DateTime
+  endsOn       DateTime
+  status       String      @default("OPEN") // OPEN | CLOSED
+  closedAt     DateTime?
+  closedById   String?
+  snapshot     Json?
+  snapshotHash String?
+  journals     GlJournal[]
+}
+
+model GlJournal {
+  id             String    @id @default(cuid())
+  seq            Int       @unique
+  createdAt      DateTime  @default(now())
+  entryDate      DateTime
+  periodId       String
+  period         GlPeriod  @relation(fields: [periodId], references: [id])
+  kind           String
+  source         String // TRANSFER | MANUAL | RECON | SYSTEM
+  memo           String?
+  transferId     String?
+  organizationId String?
+  reversalOfId   String?   @unique
+  idempotencyKey String?   @unique
+  createdById    String?
+  prevHash       String
+  hash           String
+  entries        GlEntry[]
+
+  @@index([transferId])
+  @@index([organizationId])
+  @@index([periodId])
+  @@index([kind])
+}
+
+model GlEntry {
+  id             String    @id @default(cuid())
+  journalId      String
+  journal        GlJournal @relation(fields: [journalId], references: [id])
+  accountId      String
+  account        GlAccount @relation(fields: [accountId], references: [id])
+  currency       String
+  amountMinor    BigInt
+  baseUsdCents   BigInt
+  /// Customer dimension for per-customer statements.
+  organizationId String?
+
+  @@index([journalId])
+  @@index([accountId, currency])
+  @@index([organizationId])
+}
+
+model GlChain {
+  id       Int    @id
+  lastSeq  Int    @default(0)
+  lastHash String @default("GENESIS")
+}
+
+// ── Partner statement reconciliation ──
+model ReconBatch {
+  id         String      @id @default(cuid())
+  createdAt  DateTime    @default(now())
+  partner    String
+  label      String?
+  uploadedBy String?
+  lines      ReconLine[]
+}
+
+model ReconLine {
+  id            String     @id @default(cuid())
+  batchId       String
+  batch         ReconBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  /// FUNDING | PAYOUT | FEE | OTHER
+  direction     String
+  reference     String
+  currency      String
+  amountMinor   BigInt
+  occurredOn    DateTime?
+  description   String?
+  /// MATCHED | AMOUNT_MISMATCH | UNMATCHED | RESOLVED
+  status        String     @default("UNMATCHED")
+  transferId    String?
+  expectedMinor BigInt?
+  note          String?
+  resolvedById  String?
+  resolvedAt    DateTime?
+
+  @@index([batchId])
+  @@index([status])
+  @@index([transferId])
+}
+
+// ── Trade and compliance documents (eFIRA/FIRC/eBRC/bank certificates, invoices, proofs) ──
+// Certificates are issued by banks / DGFT / partners, never by Vaulte: this table stores, links and verifies them.
+model Document {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  /// EFIRA | FIRC | EBRC | BRC | BANK_CERT | INVOICE_COPY | SHIPPING_BILL | PURPOSE_PROOF | OTHER
+  type     String
+  issuer   String?
+  number   String?
+  issuedOn DateTime?
+  /// Cross-references: EDPMS/IRM numbers, shipping bill, DGFT reference...
+  refs     Json      @default("{}")
+  /// UPLOAD | PARTNER | GENERATED | EMAIL | RECONCILIATION | POLL
+  source   String
+  /// RECEIVED (awaiting staff check) | VERIFIED | REJECTED
+  status   String    @default("RECEIVED")
+  note     String?
+
+  /// File is optional: some certificates arrive as a reference number only.
+  filename   String?
+  mime       String?
+  size       Int?
+  sha256     String?
+  storageKey String?
+
+  uploadedById String?
+  verifiedById String?
+  verifiedAt   DateTime?
+
+  organizationId String
+  transferId     String?
+  invoiceId      String?
+
+  @@index([organizationId])
+  @@index([transferId])
+  @@index([status])
+  @@index([type])
+}
+
+// ── ERP / accounting integrations ──
+model ErpConnection {
+  id             String    @id @default(cuid())
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  organizationId String
+  /// QUICKBOOKS | ZOHO | XERO | TALLY
+  provider       String
+  /// CONNECTED | NEEDS_REAUTH | DISCONNECTED
+  status         String    @default("CONNECTED")
+  /// External company id: QuickBooks realmId, Zoho organization_id, Xero tenantId. Tally: company name.
+  tenant         String?
+  accessEnc      String?
+  refreshEnc     String?
+  expiresAt      DateTime?
+  /// Ledger/account mapping and options: bank, charges, party clearing account, base currency, create_masters...
+  mapping        Json      @default("{}")
+  /// Only transfers completed on/after this moment are synced.
+  syncFrom       DateTime  @default(now())
+  lastSyncAt     DateTime?
+  lastError      String?
+
+  @@unique([organizationId, provider])
+}
+
+model ErpSyncRecord {
+  id             String    @id @default(cuid())
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  organizationId String
+  provider       String
+  transferId     String
+  /// SYNCED | FAILED | SKIPPED
+  status         String
+  externalId     String?
+  error          String?
+  attempts       Int       @default(0)
+  syncedAt       DateTime?
+
+  @@unique([organizationId, provider, transferId])
+  @@index([status])
+}
+
+/// A customer's request for an eFIRA/FIRC/eBRC/BRC/bank certificate for a completed transfer. Vaulte only asks the issuer
+/// (partner / bank) and tracks the request; it never issues these certificates itself.
+model DocumentRequest {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// EFIRA | FIRC | EBRC | BRC | BANK_CERT
+  type      String
+  /// REQUESTED | IN_PROGRESS | FULFILLED | REJECTED | CANCELLED
+  status    String  @default("REQUESTED")
+  note      String?
+  /// Staff message to the customer (why it was rejected, expected date...)
+  staffNote String?
+
+  organizationId      String
+  transferId          String
+  requestedById       String?
+  fulfilledDocumentId String?
+  fulfilledAt         DateTime?
+
+  @@index([organizationId, status])
+  @@index([transferId, type])
+  @@index([status, createdAt])
+}
+
+/// Milestone deal between a seller (a Vaulte customer) and a buyer. Two modes, neither of which lets Vaulte hold money:
+///  PARTNER_ESCROW  - a licensed escrow agent holds the funds; Vaulte orchestrates and instructs.
+///  PAY_ON_APPROVAL - nobody holds funds; each milestone is invoiced when the buyer approves it (milestone billing with an approval gate).
+model EscrowDeal {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  title              String
+  description        String?
+  terms              String
+  mode               String
+  /// DRAFT | AWAITING_BUYER | ACTIVE | COMPLETED | CANCELLED
+  status             String  @default("DRAFT")
+  currency           String
+  publicToken        String  @unique @default(cuid())
+  /// Days after a delivery is submitted before silence counts as approval (agreed up front in the terms shown to the buyer).
+  approvalWindowDays Int     @default(7)
+  /// RBI purpose code for the milestone invoices (required when the seller is an Indian business).
+  purposeCode        String?
+
+  organizationId String
+  sellerEntityId String
+  buyerName      String
+  buyerEmail     String
+  buyerCountry   String
+  /// CLEAR | REVIEW (sanctions screening of the buyer at creation)
+  buyerScreening String?
+
+  agent      String?
+  agentRef   String?
+  acceptedAt DateTime?
+
+  milestones EscrowMilestone[]
+  events     EscrowEvent[]
+
+  @@index([organizationId, status])
+}
+
+model EscrowMilestone {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  dealId      String
+  deal        EscrowDeal @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  seq         Int
+  title       String
+  description String?
+  amount      BigInt
+  /// UPFRONT (invoiced at acceptance) | ON_APPROVAL. Only meaningful in PAY_ON_APPROVAL mode.
+  payTiming   String     @default("ON_APPROVAL")
+  dueDate     DateTime?
+  /// PENDING | FUNDED | SUBMITTED | APPROVED | RELEASED | DISPUTED | REFUNDED | CANCELLED
+  status      String     @default("PENDING")
+
+  submissionNote String?
+  submittedAt    DateTime?
+  approvedAt     DateTime?
+  /// BUYER | SYSTEM (deemed approval) | STAFF (dispute resolution)
+  approvedBy     String?
+  releasedAt     DateTime?
+  invoiceId      String?
+  agentRef       String?
+
+  disputeReason   String?
+  disputeOpenedBy String?
+  disputeOpenedAt DateTime?
+  /// RELEASE | REFUND
+  resolution      String?
+  resolutionNote  String?
+  resolvedById    String?
+  resolvedAt      DateTime?
+
+  @@unique([dealId, seq])
+  @@index([status])
+  @@index([invoiceId])
+}
+
+model EscrowEvent {
+  id          String     @id @default(cuid())
+  createdAt   DateTime   @default(now())
+  dealId      String
+  deal        EscrowDeal @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  milestoneId String?
+  /// SELLER | BUYER | STAFF | SYSTEM | AGENT
+  actor       String
+  type        String
+  note        String?
+
+  @@index([dealId, createdAt])
+}
+
+/// Certificates and bank messages that arrived by email from an allow-listed sender (banks, DGFT, partners). Dedupes by Message-ID
+/// and gives staff a queue for the ones that could not be matched to a transfer.
+model InboundMessage {
+  id           String    @id @default(cuid())
+  receivedAt   DateTime  @default(now())
+  messageId    String    @unique
+  fromAddr     String
+  subject      String
+  /// MATCHED | UNMATCHED | AMBIGUOUS | REJECTED
+  status       String
+  note         String?
+  transferId   String?
+  documentIds  Json      @default("[]")
+  /// Staff who resolved an UNMATCHED/AMBIGUOUS message
+  resolvedById String?
+  resolvedAt   DateTime?
+
+  @@index([status])
+}
+
+/// Lease + last result for each scheduled job, so several instances never run the same job at once and staff can see what ran when.
+model JobLease {
+  name        String    @id
+  lockedUntil DateTime  @default(now())
+  owner       String?
+  lastRunAt   DateTime?
+  lastOk      Boolean?
+  lastResult  Json?
+  lastMs      Int?
+}
+
+/// Interest from prospective pilot customers (public form). Test-mode pilot only: no live money is promised here.
+model PilotLead {
+  id         String   @id @default(cuid())
+  createdAt  DateTime @default(now())
+  name       String
+  email      String   @unique
+  company    String
+  country    String
+  role       String?
+  /// e.g. "US>IN"
+  corridor   String?
+  volumeBand String?
+  useCase    String?
+  notes      String?
+  consentAt  DateTime
+  /// NEW | CONTACTED | PILOT | PAUSED | CLOSED
+  status     String   @default("NEW")
+  staffNote  String?
+  source     String?
+
+  @@index([status, createdAt])
+}
+
+/// The customer's onboarding with a licensed partner. Vaulte runs KYC/KYB and sends the approved package; the partner (the regulated
+/// provider of record) decides. Live routing through a partner requires APPROVED.
+model PartnerCustomer {
+  id             String       @id @default(cuid())
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  partner        String
+  /// true = test mode (mock or sandbox partner), false = live partner
+  sandbox        Boolean      @default(true)
+  partnerRef     String?
+  /// INVITED | SUBMITTED | NEEDS_INFO | APPROVED | REJECTED
+  status         String       @default("INVITED")
+  note           String?
+  /// A step only the partner can complete (for example its hosted KYC or RFI form): the dashboard opens it for the customer
+  actionUrl      String?
+  submittedAt    DateTime?
+  decidedAt      DateTime?
+  decidedBy      String?
+
+  @@unique([organizationId, partner, sandbox])
+  @@index([status, updatedAt])
+}
+
+/// A data-subject request (access, correction, erasure, withdrawal of consent, portability, objection, nomination, appeal) from the public form or the account.
+model PrivacyRequest {
+  id           String    @id @default(cuid())
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  /// Public reference shown to the requester, e.g. DSR-7K3F9Q2A
+  reference    String    @unique
+  email        String
+  name         String
+  region       String
+  /// ACCESS | CORRECTION | ERASURE | WITHDRAW_CONSENT | PORTABILITY | OBJECTION | RESTRICTION | NOMINATE | APPEAL | OTHER
+  type         String
+  details      String?
+  userId       String?
+  /// RECEIVED | IDENTITY_PENDING | IN_PROGRESS | COMPLETED | PARTIALLY_COMPLETED | REFUSED
+  status       String    @default("RECEIVED")
+  dueAt        DateTime
+  decidedAt    DateTime?
+  decidedBy    String?
+  staffNote    String?
+  responseNote String?
+
+  @@index([status, dueAt])
+  @@index([email])
+}
+
+/// A short, shareable payment address such as acme@vaulte: a directory alias for a VERIFIED entity's receiving instructions
+/// (its virtual accounts per currency). It moves nothing and holds nothing; the licensed partner behind each account does.
+model PayAddress {
+  id             String       @id @default(cuid())
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  handle         String       @unique
+  status         String       @default("ACTIVE") // ACTIVE | DISABLED
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  entityId       String
+  entity         Entity       @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  /// Shown on the public page next to the verified name
+  tagline        String?
+
+  @@unique([entityId])
+  @@index([organizationId])
+}

@@ -1,0 +1,85 @@
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Mono:wght@300;400;500&family=Syne:wght@400;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ink: #0A0A0F;
+  --paper: #F4F1EB;
+  --cream: #EDE9E0;
+  --gold: #C9A84C;
+  --gold-light: #E8D08A;
+  --rust: #B85C38;
+  --slate: #3D4A5C;
+  --mist: #8C9AAD;
+  --v-green: #2D6A4F;
+  --v-green-light: #52B788;
+  --v-red: #C1121F;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--paper);
+  color: var(--ink);
+  font-family: 'DM Mono', monospace;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--cream); }
+::-webkit-scrollbar-thumb { background: #C9A84C55; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--gold); }
+
+/* Selection */
+::selection { background: rgba(201, 168, 76, 0.25); }
+
+@layer components {
+  .btn-primary {
+    @apply bg-ink text-paper font-mono text-xs tracking-widest uppercase px-6 py-3 border border-ink transition-all duration-200 hover:bg-slate cursor-pointer;
+  }
+  .btn-ghost {
+    @apply bg-transparent text-slate font-mono text-xs tracking-widest uppercase px-6 py-3 border border-slate/40 transition-all duration-200 hover:border-ink hover:text-ink cursor-pointer;
+  }
+  .btn-gold {
+    @apply bg-gold text-ink font-mono text-xs tracking-widest uppercase px-6 py-3 border border-gold transition-all duration-200 hover:bg-gold-light cursor-pointer;
+  }
+  .input-field {
+    @apply w-full bg-transparent border border-ink/20 text-ink font-mono text-sm px-4 py-3 outline-none transition-colors focus:border-gold placeholder:text-mist;
+  }
+  .label-text {
+    @apply block font-mono text-[9px] tracking-[0.1em] uppercase text-mist mb-2;
+  }
+  .card {
+    @apply border border-ink/10 bg-paper p-6;
+  }
+  .card-dark {
+    @apply border border-white/10 bg-ink/95 p-6;
+  }
+  .section-tag {
+    @apply font-mono text-[10px] tracking-[0.12em] uppercase text-mist mb-5 flex items-center gap-3 before:content-[''] before:w-4 before:h-px before:bg-mist;
+  }
+  .h1-serif {
+    @apply font-serif text-5xl md:text-6xl leading-[1.0] tracking-tight;
+  }
+  .h2-serif {
+    @apply font-serif text-4xl md:text-5xl leading-[1.05] tracking-tight;
+  }
+  .status-pill {
+    @apply inline-block font-mono text-[9px] tracking-widest uppercase px-2 py-1 rounded-[1px];
+  }
+  .status-settled { @apply bg-v-green/15 text-v-green-light border border-v-green/25; }
+  .status-processing { @apply bg-gold/15 text-gold border border-gold/25; }
+  .status-pending { @apply bg-gold/10 text-gold/80 border border-gold/20; }
+  .status-failed { @apply bg-v-red/15 text-v-red border border-v-red/25; }
+  .status-cancelled { @apply bg-mist/15 text-mist border border-mist/20; }
+  .status-draft { @apply bg-mist/10 text-mist border border-mist/15; }
+}

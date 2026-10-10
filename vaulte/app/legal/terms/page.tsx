@@ -1,0 +1,73 @@
+import Link from "next/link";
+import LegalPage, { A, H } from "@/components/legal/LegalPage";
+import { COMPANY, REGIONS } from "@/lib/legal";
+
+export const dynamic = "force-dynamic";
+export const metadata = { title: "Terms of Service" };
+
+export default function Terms() {
+  return (
+    <LegalPage title="Terms of Service" subtitle="The agreement between you and Vaulte for the platform, APIs, invoices, payment links, checkout and milestone deals.">
+      <p>These terms are between you and <strong>{COMPANY.name}</strong>, {COMPANY.address}{COMPANY.registration ? `, registration ${COMPANY.registration}` : ""} (&quot;Vaulte&quot;, &quot;we&quot;, &quot;us&quot;). By creating an account, paying through a Vaulte link, approving a Vaulte deal or using our API you agree to them, and to the documents they refer to: the <A href="/legal/privacy">Privacy Policy</A>, <A href="/legal/aml">AML Policy</A>, <A href="/legal/acceptable-use">Acceptable Use Policy</A>, <A href="/legal/disclosures">Fee and Risk Disclosures</A> and <A href="/legal/cookies">Cookie Notice</A>. Region-specific terms apply on top: {REGIONS.map((r, i) => <span key={r.slug}>{i > 0 ? " · " : ""}<Link className="text-gold underline" href={`/legal/terms/${r.slug}`}>{r.name}</Link></span>)}. If you use Vaulte for a business, you confirm that you can bind it to these terms. Nothing here limits rights you cannot lawfully give up.</p>
+
+      <H id="s1">1. What Vaulte is, and is not</H>
+      <p>Vaulte is a technology platform. It verifies customers, compares routes and prices, and instructs payments through independent, licensed third-party partners (banks, payment institutions, authorised dealers, escrow agents, foreign-exchange and virtual-asset providers). <strong>Vaulte does not hold, receive on its own account, or take custody of your money or digital assets.</strong> Partners receive, convert, hold and pay out funds under their own licences and terms, which you may be asked to accept; the partner is the regulated provider of record for the payment. Vaulte acts as the partner&apos;s agent or technology provider, as stated for each route, and is paid a fee or a share of the partner&apos;s margin that is shown in your quote. Vaulte is not a bank, a payment aggregator, an escrow agent or a licensed money transmitter. Nothing on Vaulte is investment, legal, tax or accounting advice.</p>
+
+      <H id="s2">2. Test mode and live mode</H>
+      <p>Test mode uses simulated partners and test money; nothing in it is a real payment, rate or certificate (see <A href="/legal/sandbox">Test-mode terms</A>). Live mode is enabled for an account only after verification, and only for corridors and countries we have opened. A country can be closed for live payments even if test mode works. We tell you in the app which corridors are live.</p>
+
+      <H id="s3">3. Your account</H>
+      <ul className="list-disc pl-6 space-y-1">
+        <li>You must be 18 or over, have legal capacity, and give accurate, complete, current information. Keep it up to date.</li>
+        <li>Keep your password, one-time codes, authenticator device and API keys secret. You are responsible for activity under your credentials until you tell us they are compromised. Enable two-factor authentication.</li>
+        <li>One person or business, one account, unless we agree otherwise. You may not sell, share or transfer your account.</li>
+        <li>Roles inside a business account (owner, admin, finance, developer, read-only) are set by the owner, who is responsible for who holds them.</li>
+      </ul>
+
+      <H id="s4">4. Verification, limits, screening</H>
+      <p>You must complete identity or business verification (KYC/KYB) before live payments, and we and our partners may ask for more information at any time. Verification includes checks against official registers and sanctions, politically-exposed-person and adverse-media lists. Legal names must come from your identity or registry documents. We and our partners may limit, delay, hold, refuse or reverse any transaction, and may close an account, where verification or screening cannot be completed, where the law or a partner or regulator requires it, or where we reasonably suspect fraud, abuse or a breach of these terms. Where the law allows we tell you why; we may be prohibited from telling you in some cases. Limits depend on your verification level.</p>
+
+      <H id="s5">5. Quotes, fees, taxes</H>
+      <p>A quote shows the exchange rate, the partners&apos; costs, Vaulte&apos;s fee or markup and the estimated arrival, and is firm until it expires. After you create a transfer from a firm quote the quoted amount applies, unless a partner fails and a replacement partner is used; you still receive the quoted amount. Estimated times and comparisons with bank wires are estimates, not promises. Fees are deducted from the amount sent unless the quote says otherwise. Our fees exclude taxes. We add Goods and Services Tax or another sales, value-added or similar tax where the law requires, and you are responsible for withholding, customs, income and other taxes that apply to you or your transaction. See the <A href="/legal/disclosures">Fee and Risk Disclosures</A>. Changes to our published fees apply to new quotes, never to quotes already issued.</p>
+
+      <H id="s6">6. Permitted use</H>
+      <p>Use Vaulte only for lawful purposes you have truthfully declared (purpose codes, invoices, HS codes, source of funds) and in line with the <A href="/legal/acceptable-use">Acceptable Use Policy</A>. You may not use Vaulte for sanctioned persons or places, money laundering, terrorist or proliferation financing, fraud, unlicensed money services, or any activity prohibited where the sender or recipient is. Payments into India are fiat only. Personal remittances are subject to regulatory limits that we enforce. If you give us false information you are responsible for the loss it causes.</p>
+
+      <H id="s7">7. Invoices, payment links and checkout (sellers)</H>
+      <p>If you issue invoices, proforma invoices, payment links or checkout sessions you are the seller. You are responsible for their content, prices, tax particulars and for the goods or services you supply. Vaulte prints what you enter and does not check it for tax correctness. A proforma invoice is an estimate and not a tax invoice. Buyers pay through our licensed partners; Vaulte is not a party to your sale and does not guarantee that a buyer will pay. Refunds, returns and consumer rights between you and your buyer are yours to handle. Return URLs you give us must be https and under your control.</p>
+
+      <H id="s8">8. Milestone deals and escrow</H>
+      <p>A deal lets a seller and a buyer agree milestones. In <strong>partner escrow</strong> a licensed escrow agent, not Vaulte, holds the buyer&apos;s money for each milestone and releases or returns it on the buyer&apos;s approval, on a deemed approval, or on a dispute decision; the agent&apos;s own terms also apply. In <strong>pay-on-approval</strong> mode no one holds money before approval: Vaulte invoices the milestone when the buyer approves it (or at the start for milestones marked pay-upfront), and the seller bears the risk that a buyer does not pay. The buyer&apos;s approval window and the effect of silence are shown in the deal terms; silence for the stated number of days counts as approval. Anyone holding the buyer&apos;s deal link can act for the buyer, so keep it private. If there is a dispute, both sides can submit their case and evidence, and a Vaulte reviewer decides how to instruct the agent or invoice. That decision is an operational decision under this agreement; it is not arbitration or a court judgment, and either party may still pursue its legal rights, including under section 17.</p>
+
+      <H id="s9">9. Certificates and documents</H>
+      <p>You can ask us to request an eFIRA, FIRC, eBRC, BRC or bank certificate for a completed transfer. These documents are issued by banks, authorised dealers, licensed partners or authorities, not by Vaulte. We pass your request on and attach what we receive, and cannot promise that an issuer will provide one or when. Documents generated by Vaulte (payment advices, statements, settlement reports, invoices) are records of Vaulte&apos;s systems and are not bank certificates. Keep your own copies for the period the law requires.</p>
+
+      <H id="s10">10. Delays, holds, reversals, failed payments</H>
+      <p>Banks and partners work to their own cut-off times and holidays. A transfer may be held for review, rejected, returned or reversed by a partner or intermediary bank. If a payout fails, the partner returns the money to the sender under its terms, and any fee we are entitled to keep is stated in the quote.</p>
+
+      <H id="s11">11. API, integrations and webhooks</H>
+      <p>API keys are credentials: you are responsible for activity under them. We may rate-limit or suspend keys that threaten the platform. Webhooks are delivered at least once and may repeat; verify signatures and handle duplicates. Third-party accounting or e-commerce systems you connect are governed by those providers&apos; terms, and you authorise us to send them the data the connection needs.</p>
+
+      <H id="s12">12. Intellectual property and feedback</H>
+      <p>Vaulte, its software, design, documentation and marks belong to us or our licensors. We grant you a limited, non-exclusive, non-transferable, revocable right to use the service in line with these terms. You keep ownership of your data and give us the licence needed to run the service for you. Feedback you give may be used by us without obligation. Do not reverse-engineer, scrape, or interfere with the service, or use it to build a competing service.</p>
+
+      <H id="s13">13. Privacy</H>
+      <p>Our <A href="/legal/privacy">Privacy Policy</A> explains how we handle personal data. If you give us personal data about other people (directors, beneficial owners, payers, recipients) you confirm that you may lawfully do so and that you have told them.</p>
+
+      <H id="s14">14. Our responsibility to you</H>
+      <p>We provide the service with reasonable skill and care and will do what we say in our documents. We do not promise that the service is uninterrupted or error-free, that a partner will accept every payment, or that a rate or time will be available later. To the fullest extent the law allows: (a) we are not liable for loss caused by a partner, bank, network or other third party, a sanction or regulatory action, a failure of the internet or power, your breach of these terms or your incorrect instructions, or events outside our reasonable control; (b) we are not liable for indirect or consequential loss, loss of profit, revenue, goodwill or opportunity, or loss from currency movements; and (c) our total liability to you for all claims arising in any 12 months is limited to the fees you paid to Vaulte in that period (or, for an individual with no fees, USD 100). Nothing limits liability that cannot lawfully be limited, including for fraud, wilful misconduct, death or personal injury caused by negligence, or mandatory consumer rights. Where the law gives you a statutory refund or payment-error right against a licensed partner, it stays with the partner and we help you use it.</p>
+
+      <H id="s15">15. Your responsibility to us</H>
+      <p>If you are a business, you will indemnify Vaulte and its partners against third-party claims, regulatory penalties and costs arising from your breach of these terms, your false declarations, the content of your invoices or the goods and services you sell, or your infringement of the law or of others&apos; rights. We tell you promptly about a claim and let you defend it, and you will not settle it in a way that binds us without our consent.</p>
+
+      <H id="s16">16. Changes, suspension, termination</H>
+      <p>We may change these terms. For a material change we give at least 30 days&apos; notice by email and in the app and ask you to accept the new version before you continue (immediately if the law, a partner or a regulator requires it). You may close your account at any time once no transfer, milestone or dispute is pending. We may suspend or end access immediately where required by law, a partner or a regulator, or for serious breach, and on 30 days&apos; notice for any other reason. Sections that by nature survive (fees owed, records, liability, disputes) continue. We keep records as the law requires.</p>
+
+      <H id="s17">17. Governing law and disputes</H>
+      <p>These terms and any dispute about them or about Vaulte are governed by {COMPANY.governingLaw}, subject to the mandatory rights in your region&apos;s terms. Please first write to <A href={`mailto:${COMPANY.supportEmail}`}>{COMPANY.supportEmail}</A> or use the <A href="/legal/grievance">grievance process</A>; we try to settle disputes within 30 days. For businesses, an unresolved dispute is finally resolved by arbitration under the Arbitration and Conciliation Act, 1996 before a sole arbitrator appointed by agreement or, failing agreement within 15 days, by the court; the seat and venue are New Delhi, the language is English, and the award is final and binding. Either side may seek urgent court relief. For individuals and consumers the regional terms preserve your right to go to the courts and authorities of your home country where the law gives you that right.</p>
+
+      <H id="s18">18. General</H>
+      <p><strong>Notices:</strong> we write to the email on your account and in the app; you write to <A href={`mailto:${COMPANY.supportEmail}`}>{COMPANY.supportEmail}</A>. <strong>Electronic records:</strong> you agree that these terms, statements and notices are given electronically and that electronic records and signatures are binding. <strong>Force majeure:</strong> neither side is liable for a failure caused by events beyond its reasonable control, but payment obligations for services already received remain. <strong>Assignment:</strong> you may not assign these terms without our consent; we may assign them to a successor with notice. <strong>Entire agreement; severability:</strong> these terms and the documents they refer to are the whole agreement; if a part is unenforceable, the rest stays in force. <strong>No waiver:</strong> a delay in enforcing a right is not a waiver. <strong>Third parties:</strong> only the parties (and our partners for the sections that name them) may enforce these terms. <strong>Language:</strong> English governs; translations are for convenience.</p>
+    </LegalPage>
+  );
+}

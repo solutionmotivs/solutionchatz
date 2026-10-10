@@ -1,0 +1,86 @@
+[
+  {
+    "id": "awx.direct.usd-eur",
+    "partner": "airwallex",
+    "kind": "DIRECT",
+    "country": "AU",
+    "jurisdiction": "AU",
+    "srcCurrency": "USD",
+    "destCurrency": "EUR",
+    "rails": [
+      "SEPA_INSTANT",
+      "SWIFT"
+    ],
+    "tokens": [],
+    "chains": [],
+    "spreadBps": 20,
+    "feeBps": 0,
+    "fixedFeeUsd": 0,
+    "etaSec": 3600,
+    "minUsd": 10,
+    "maxUsd": 100000,
+    "kinds": [
+      "BUSINESS",
+      "PERSONAL"
+    ],
+    "structure": {
+      "principal": "airwallex",
+      "fundsHeldBy": "PARTNER",
+      "accountHolder": "CUSTOMER_SUBACCOUNT",
+      "vaulteRole": "AGENT",
+      "agreementRef": "REPLACE-WITH-SIGNED-AGREEMENT-ID"
+    }
+  },
+  {
+    "id": "flatfee.indiapayout.example",
+    "partner": "example_pacb",
+    "kind": "INDIA_PAYOUT",
+    "country": "IN",
+    "jurisdiction": "IN",
+    "destCurrency": "INR",
+    "acceptsFiat": [
+      "USD",
+      "EUR",
+      "GBP",
+      "AED"
+    ],
+    "rails": [
+      "IMPS",
+      "RTGS",
+      "NEFT"
+    ],
+    "tokens": [],
+    "chains": [],
+    "spreadBps": 0,
+    "feeBps": 0,
+    "fixedFeeUsd": 0,
+    "feeSchedule": [
+      {
+        "upToUsd": 2000,
+        "flatUsd": 19
+      },
+      {
+        "upToUsd": 10000,
+        "flatUsd": 29
+      },
+      {
+        "upToUsd": null,
+        "bps": 30
+      }
+    ],
+    "etaSec": 28800,
+    "minUsd": 10,
+    "maxUsd": 29000,
+    "kinds": [
+      "BUSINESS"
+    ],
+    "indiaAuth": "PA_CB_E",
+    "structure": {
+      "principal": "example_pacb",
+      "fundsHeldBy": "PARTNER",
+      "accountHolder": "PARTNER_SAFEGUARDED",
+      "vaulteRole": "AGENT",
+      "agreementRef": "REPLACE-WITH-SIGNED-AGREEMENT-ID"
+    }
+  }
+]

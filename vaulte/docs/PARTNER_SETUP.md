@@ -1,0 +1,119 @@
+# Partner setup, one by one (free sandboxes first)
+
+Companion to `docs/PARTNERS.md` (who) and `docs/RAMPS.md`. Status: October 2026. Nobody can open these accounts for you: sign-up needs your identity, company details and email/phone verification, and the keys belong to your account. This file gives the order, the exact place to get each key, and where each key goes.
+
+## Where the keys go
+
+1. **Never paste keys into chat, email or a repo.** Anything in chat is logged.
+2. Local: copy `.env.partners.example` to `.env.partners.local` (already git-ignored) and fill in only what you have.
+3. The demo/staging server: set the same names as environment variables on Render (dashboard > vaulte-demo > Environment). Cloud sessions are temporary; Render env vars are what persist.
+4. Check what works: `node scripts/partner-check.mjs`. It lists every provider, says which keys are missing, and for providers with a safe read-only probe it authenticates against the sandbox (moves no money, creates nothing).
+5. Tell me "X ka sandbox key set kar diya". I then read that provider's current API docs, write or fix its adapter, run it against the sandbox, and report the real quote and timing.
+
+## What "free" can and cannot mean
+
+- **Sandbox accounts are free** at most providers, but sandbox money is fake. They prove the integration, not a customer payment.
+- **Real customers with real money cost money and need approval**: each provider charges its own fees per transaction, wants business verification (KYB) before live access, and counsel has to clear each country first. There is no free way to move real money through licensed partners.
+- **Free customer trial that is possible today:** run the demo (`https://vaulte-demo.onrender.com`) in test mode with design-partner customers. They see the real quotes, flows, certificates and statements, with simulated partners. When a partner's sandbox keys are set, that partner's quotes become real (still test money).
+
+## Order to do it (self-serve first)
+
+| # | Provider | Get a free sandbox | Keys to collect | Unlocks | Adapter today |
+|---|---|---|---|---|---|
+| 1 | **Airwallex** | Sign up at the sandbox web app (sandbox.airwallex.com); keys under Account > Developer > API keys. Base URL `https://api.sandbox.airwallex.com` | `AIRWALLEX_CLIENT_ID`, `AIRWALLEX_API_KEY`, `AIRWALLEX_WEBHOOK_SECRET` | FX quotes, payouts, global accounts (USD, EUR, GBP, AUD, CAD, HKD, SGD, JPY, CNH) | built |
+| 2 | **Wise Platform** | Test user at `https://wise-sandbox.com/register` (2FA code is always 111111); create a developer account; API token under Settings > API tokens. Client credentials for the Platform come from Wise's partner onboarding | `WISE_CLIENT_ID`, `WISE_CLIENT_SECRET`, `WISE_PROFILE_ID` | mid-market FX quotes, transfers | built |
+| 3 | **Currencycloud** | Register a demo developer key at `https://developer.currencycloud.com`. Demo trades run in a demo market and send no real payments | `CURRENCYCLOUD_LOGIN_ID`, `CURRENCYCLOUD_API_KEY` | FX rates, funding accounts (GBP, EUR, USD) | built |
+| 4 | **Circle** (Mint now; **CPN** is the one that lands INR/AED/SGD/EUR/USD fiat, see `docs/RAMPS.md`) | Sandbox account at Circle (Mint API); ask Circle for CPN / Managed Payments access; base `https://api-sandbox.circle.com` (its `/ping` answers publicly) | `CIRCLE_API_KEY`, then register a bank account for `CIRCLE_WIRE_ACCOUNT_ID` | USDC/EURC deposit addresses, redemption | built (first-party payout limits: `docs/RAMPS.md`) |
+| 5 | **Cashfree** | Sandbox keys are auto-generated in the dashboard (Developers > API Keys); base `https://sandbox.cashfree.com`. Ask them for the **cross-border (PA-CB) export product** and its sandbox | `CASHFREE_CLIENT_ID`, `CASHFREE_CLIENT_SECRET` | INR payout (IMPS/NEFT/RTGS/UPI) only | adapter built, **sandbox not yet reachable: needs the Public Key (signature) or an IP whitelist**; see below |
+| 6 | **Razorpay** | Test-mode keys are available in the dashboard without live activation (`rzp_test_...`). Ask about their international/export (PA-CB) product | `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` | INR landing | not built |
+| 7 | **Modern Treasury** | Create an account; API keys under Developers > API Keys; keys decide sandbox vs live. Confirm the sandbox is self-serve for you | `MODERN_TREASURY_ORG_ID`, `MODERN_TREASURY_API_KEY` | US ACH, same-day ACH, wire, RTP, FedNow orchestration over a connected bank | not built |
+| 8 | **Bridge** (Stripe) | Email support@bridge.xyz to get a developer account, then generate sandbox keys in its dashboard; base `https://api.sandbox.bridge.xyz` | `BRIDGE_API_KEY` | stablecoin ramps and orchestration | not built |
+| 9 | **BVNK** | Ask your BVNK account manager for a sandbox; create Hawk ID/key in its portal; base `https://api.sandbox.bvnk.com` | `BVNK_HAWK_ID`, `BVNK_HAWK_KEY` | stablecoin payments and payouts | not built |
+| 10 | **zerohash** | Contact zerohash for **Cert** (sandbox) credentials | `ZEROHASH_API_KEY`, `ZEROHASH_API_SECRET`, `ZEROHASH_PASSPHRASE` | US stablecoin ramps (licensed) | not built |
+| 11 | **PayU, Juspay, BillDesk, Adyen India** | Each has a test/UAT environment after merchant sign-up or a sales call. Ask each for the cross-border inbound product with INR settlement and eFIRA | see `.env.partners.example` | INR landing (alternatives to 5 and 6) | not built |
+| 12 | **ClearBank, Banking Circle, Modulr** | Sales/onboarding gated; they provision a sandbox. ClearBank and Banking Circle are bank-level participants in SEPA/Faster Payments; Modulr is an EMI | see `.env.partners.example` | SEPA, SEPA Instant, Faster Payments | not built |
+| 13 | **Corpay, Convera, Nium** | Contact each (Corpay sandbox `https://crossborder.beta.corpay.com`, technicalsales@corpay.com; Convera needs its onboarding team for OAuth or a client certificate; Nium issues `clientHashId` and an API key in its portal after verification) | see `.env.partners.example` | negotiated FX for volume, exotic currencies | not built |
+
+Start with 1 to 4. They are self-serve, their adapters exist, and together they give you real FX quotes from three competing providers plus the stablecoin leg. Then do 5 and 6 (India), which matter most for your first corridor.
+
+## Modern Treasury and "bank APIs"
+
+- **Modern Treasury** is a payment-operations layer. It sits on top of banks you already have accounts with and gives one API for ACH, same-day ACH, wires, RTP, FedNow and stablecoin payments, plus reconciliation and a ledger. It is not a bank and not a licence: the money sits at the connected bank.
+- **Sponsor bank APIs** (for example Column, Increase, Lead Bank, Cross River, Evolve) give you accounts and direct rails. For ACH/Fedwire/FedNow you need one bank behind you: either directly or through a layer such as Modern Treasury.
+- **ClearBank, Banking Circle, Modulr** do the same for SEPA, SEPA Instant and UK Faster Payments (ClearBank and Banking Circle are banks, Modulr an EMI).
+- **Which one first?** For US to India you can skip the US rails at first: Airwallex/Currencycloud USD accounts take the USD in. Add Modern Treasury only when you need direct ACH or FedNow collection.
+
+## First corridor: USD, EUR, AED, SAR to India
+
+What is already built and tested (against simulated partners):
+- USD, EUR, AED fiat or USDC/EURC in; SAR fiat in (Saudi stablecoin routes are not offered); INR out through an Indian PA-CB partner.
+- **Automatic conversion with any number of partners:** the router builds every valid route, the FX aggregator asks every enabled provider for a firm quote, and the cheapest (or fastest, or same-day) is chosen; if a partner fails, the next one takes over. USDC arrives at the licensed partner, converts to USD/EUR/AED as fiat at once, and the Indian partner lands INR. Add a partner by registering its adapter and its legs in `PARTNER_CATALOG_JSON`; nothing else changes.
+
+What needs real partners before it moves money: the INR payout partner (5 to 6 above), the stablecoin ramp (4, 8 to 10), the funding route, counsel's clearance for each country (`LIVE_COUNTRIES`), and signed agreements.
+
+Questions to ask every India partner on the first call (write the answers down):
+1. Which product receives USD/EUR/AED/SAR by bank transfer and settles INR to an Indian exporter, and does it issue the eFIRA/eBRC? How fast, by API or email?
+2. Do you accept fiat that came from a stablecoin conversion by a licensed partner, and what source-of-funds documents do you need?
+3. Per-transaction cap, fees, FX margin, cut-off times, and settlement time (IMPS/RTGS/NEFT).
+4. Sandbox, webhook signing, and idempotency.
+5. Who holds the customer's money between receipt and payout?
+
+## What each partner must declare before it carries live money
+
+Every live leg in `PARTNER_CATALOG_JSON` (and every live FX provider in `PARTNER_STRUCTURE_JSON`) names the **licensed partner as principal and holder of the funds**, who owns the account, Vaulte's role and the signed agreement reference. Without that it does not load. The customer is also onboarded **at the partner** (Vaulte sends its verified KYB package; the partner decides), and live routing waits for `APPROVED`. See `docs/AGENT_MODEL_MEMO.md`; staff record decisions of partners without an API at `/api/admin/partner-customers`.
+
+## When keys arrive
+
+Give me one provider at a time. For each I will: read its current docs, write the adapter if it does not exist, add a contract test and a smoke check, run it against the sandbox, and report the real FX quote, the rail and the measured time. Then the next.
+
+## Verified results
+
+### Currencycloud demo (checked 2026-10-07 with your demo key, read-only)
+- Login works. The demo account trades 37 currencies, including USD, EUR, GBP, AED, SAR, JPY, CAD, AUD and **INR**, but **not CNH**.
+- Our adapter returned indicative rates for USD>EUR, USD>AED, USD>SAR, EUR>GBP and AED>USD, within 1 to 12 bps of the API's own mid-market rate on demo data. These are demo numbers, not an offer and not what live pricing will be.
+- **INR is not tradeable from this account**: USD>INR and EUR>INR answer `Rate could not be retrieved`, and AED>INR and SAR>INR answer `ccy_pair_is_not_tradeable`. So Currencycloud serves the offshore FX leg and **cannot land INR**. The Indian PA-CB partner does that, as designed. Ask Currencycloud whether a live account can ever trade INR (usually through a local partner and not for onward payout to India).
+- `funding_accounts/find` on the master account returns none, and `funding_accounts/create` is "not enabled" there. This no longer blocks anything: each customer sub-account gets its own funding accounts automatically (see the walk-through below).
+- Every quote now carries the provider's trade **cut-off time**; the adapter learns the tradeable currencies from the account itself, so CNH is refused cleanly on this demo.
+- Re-run any time: `npx tsx scripts/currencycloud-live-check.ts`.
+
+### Currencycloud demo: customer sub-accounts and a full payout (done 2026-10-08, demo only)
+Run `npx tsx scripts/currencycloud-e2e.ts` (creates demo objects only; refuses the live API). It exercises our adapter end to end and passed:
+1. **Customer sub-account + contact** (`submitCustomer`): Vaulte's approved KYB profile becomes a Currencycloud sub-account named after the customer (`/v2/accounts/create`), with the account owner as its contact. The customer reference is stored as `<accountId>:<contactId>` in `PartnerCustomer.partnerRef`. Every later call for that customer acts `on_behalf_of` the contact, so money sits in the customer's own sub-account, never a pooled Vaulte account (the structure our memo requires). The demo took these fields, learned one error at a time: `legal_entity_sub_type` (`limited_liability_company`, `public_limited_company`, `limited_liability_partnership`, `unincorporated_partnership`, `sole_trader`), `identification_type/value`, `country_of_incorporation`, `date_of_incorporation`, `industry_type`, `business_website_url`, `trading_address_street/city/country`, `expected_monthly_activity_volume/value`, `expected_transaction_currencies` (one item in the demo), `expected_transaction_countries`, `customer_risk` (LOW/MEDIUM/HIGH). Missing items come back as `NEEDS_INFO` with the list, without calling Currencycloud.
+2. **Funding details in the customer's name**: a new sub-account gets its own funding accounts automatically (GBP sort code and IBAN, EUR, USD ...). `createFiatFunding` and `createVirtualAccount` return these. (The master account's own `funding_accounts/create` is "not enabled" on this demo: not needed, sub-accounts get theirs.)
+3. **Simulated deposit**: `POST /v2/demo/funding/create` with the customer's contact (`on_behalf_of`), the sub-account id and the funding account number. Demo only; the balance appears in under a minute.
+4. **Payout**: beneficiary, conversion (buy side fixed, so the recipient gets the quoted amount) and payment, all on behalf of the customer. The payment sits at `ready_to_send` on the demo (the demo does not release payments).
+What this does NOT prove: INR (not tradeable on this account; the PA-CB partner pays INR), CNH (not listed on the demo), live settlement times, the live account's permissions (sub-accounts need Currencycloud to enable them for the live programme).
+
+### Nium and Circle keys (checked 2026-10-09, read-only)
+- **Nium** (`NIUM_API_KEY` in `.env.partners.local`): base `https://gateway.nium.com/api`, headers `x-api-key`, `x-request-id` (UUID), `x-client-name`. `GET /v2/exchangeRate?sourceCurrencyCode=USD&destinationCurrencyCode=INR&sourceAmount=1000` answered 200 with sandbox rates (USD>INR 96.79, EUR>INR 108.656, USD>AED 3.6726). Customer, beneficiary and payout calls need `clientHashId` in the path (not yet supplied). Nium trades INR, unlike Currencycloud.
+- **Circle** (`CIRCLE_API_KEY`): the key format `TEST_API_KEY:<id>:<secret>` is a **Circle Console** key. It works on `https://api.circle.com/v1/w3s/...` (programmable wallets; appId returned, no wallets yet) but gets 401 on `api-sandbox.circle.com` (Circle Mint) and CPN endpoints are not enabled for it. Developer-controlled wallets would make Vaulte the holder of customer USDC, which our no-custody rule forbids, so the stablecoin leg needs a **Circle Mint** key (the licensed partner holds the funds) or Bridge.
+
+### Nium sandbox: customer, virtual account, payout (done 2026-10-09; `npx tsx scripts/nium-e2e.ts`)
+Proven on the sandbox with the account's key and `clientHashId`:
+- **Rates**: `GET /api/v2/exchangeRate` (USD>INR 96.79, EUR>INR 108.65, USD>AED 3.6726, USD>GBP 0.7551) feed the FX comparison as provider `nium` (IMPS for INR, UAEFTS for AED, Faster Payments for GBP).
+- **Customer onboarding by API**: `POST /api/v5/client/{c}/customers` with a corporate request built from Vaulte's verified KYB package. Needed beyond our old profile: applicant and owner **address, email, phone** (stored in `VerificationPerson.contact`), a **bank account for returns**, the consent time and device, and Nium's enum codes (fetched per region from `/api/v2/client/{c}/onboarding/constants`). Enums are lower-case snake (`limited_liability_company`, `control_prong`, `ubo`). The sandbox refuses a duplicate registration number and a future declaration time. Region is from the registered country: US, UK (GB/CH/MC), EU (EEA), SG (everything else, so India and UAE customers are onboarded under SG).
+- **Decision by webhook**: `CUSTOMER_STATUS_WEBHOOK` (pending / awaiting_kyc / under_review / rfi_requested / clear / rejected) is turned into a `customer.status` event that updates `PartnerCustomer` and the dashboard. Authentication is Nium's static `x-partner-key` header (set the same value as `NIUM_WEBHOOK_KEY`; have Nium add it for the client). Payout events `REMIT_TRANSACTION_PAID/REJECTED/RETURNED/CANCELLED/EXPIRED` become `payout.completed` / `payout.failed`. Set the webhook URL to `https://<site>/api/webhooks/partner/nium`.
+- **Sandbox approval**: `POST /api/v5/simulations/onboard/{customerHashId}/transition {"nextAction":"clear"}` works a few seconds after creation.
+- **Virtual account in the customer's name**: `POST /customer/{c}/wallet/{w}/paymentId {currencyCode, bankName}`; bank sources come from `GET /api/v1/client/{c}` (USD: `CFSB_US`, `JPM_SG`).
+- **Payout**: `POST /api/v1/client/{c}/customer/{cu}/wallet/{w}/remittance` (the v2 path in their quick-start does not exist) with an inline beneficiary, `purposeCode` `IR001` (goods or services, business to business), `sourceOfFunds` `Corporate Account`, IFSC as routing type `IFSC`; bank rules are enforced (an HDFC account must be 14 characters). It was accepted up to the balance check: **Insufficient funds in wallet**.
+**Update 2026-10-10: the whole product flow now runs against the Nium sandbox through the app** (`scripts/nium-app-e2e.ts`, 27/27 checks, plus `scripts/nium-e2e.ts` for the adapter alone). What the sandbox taught us, now in code:
+- **Funding a customer wallet**: a simulated third-party credit (`POST /api/v1/inward/payment/manual`) is matched by `virtualAccountNumber` and settles in 5-10 seconds only when the remitter is described (`remitterName`, `remitterBankName`, `remitterAccountNumber`, `payMode: WIRE`, `type: CREDIT`); our earlier payload lacked them, which is why it stayed Pending/Unsettled. `NiumClient.simulateVanCredit` does it. No prefund is used anywhere: `postFundedPayout` is false on the client and the payout is accepted only against the customer's own settled funds.
+- **Payout lifecycle**: the sandbox moves a payout by itself (INITIATED, IN_PROGRESS, COMPLIANCE_COMPLETED, SENT_TO_BANK, PAID in about a minute); the audit trail (`.../remittance/{srn}/audit`) is what `getPayoutStatus` reads. Nium charged `REMIT_BANK_FEE` USD 1.50 fixed for INR on top of the converted amount (set `NIUM_LOCAL_FEE_USD=1.5`; the quote shows it as partner cost).
+- **Webhooks arrive at most once by default**, so `partner-reconcile` (every 2 minutes) asks Nium about transfers waiting for money and payouts in flight, and `partner-onboarding` (every 10 minutes) about customers waiting for a decision. Webhook and poll share event ids derived from Nium's own references (`funds:<authCode>`, `payout:<srn>:paid`), so a credit or a payout is never applied twice.
+- **Customer creation is two steps**: Create Customer v5, then Submit KYC for the applicant and each individual stakeholder. Vaulte keeps only masked ID numbers, so it uses Nium's hosted liveness check (`biometric_kyc`, link in `biometricUrl`) and shows the link as the next step. Nium creates customers asynchronously ("under progress"): the call is retried briefly and again by the poll. `biometric_kyc` is refused for residents of the client's region (US): the note says so.
+- **The sandbox client is regulated in the US**: an SG-region customer is refused ("Customer region: SG does not match with client regulatory region: US"), so Indian and UAE businesses cannot be onboarded until Nium enables the SG, UK and EU regions. The e2e uses a US business with an Indian founder.
+- **Region-specific lists**: `businessType` codes differ by region (SG: PRIVATE_COMPANY, US: LIMITED_LIABILITY_COMPANY), so the code is picked from the region's own list. SG-region creation needs `documents` with a file id; the Files API route (`/api/v1/client/{c}/files`) answers "Missing Authentication Token" for our key, so uploads are unproven; sandbox runs use `NIUM_TEST_FILE_ID` (a file id from the Nium portal), live never does.
+- **Questions from Nium's compliance team (RFIs)** are shown and answered inside Vaulte (`/dashboard/partners`, `GET/POST /api/partner-customers/{id}/requests`), through the corporate RFI API (applicant and stakeholder documents, business name, other data, transaction countries, intended use). Documents are forwarded in the same call and not stored. RFI v5 needs enablement by Nium.
+- **A real partner sandbox gates like the live one**: a transfer through Nium waits (409 `PARTNER_ONBOARDING_PENDING`) until Nium approves the customer; only the `mock_*` test partners auto-approve. A customer already created at a partner is never created again.
+- **Open with Nium** (full list in `docs/NIUM_PRODUCTION_ACCESS.md`): regions, Files API, residents' KYC, webhook URL and key (set by Nium or in its portal: the client settings `notificationWebhook` and `complianceStatusCallbackUrl` are empty and have no public API), which event fires for a VAN credit, RFI v5, pricing, INR enablement and UPI, written confirmation of the RBI-authorised entity.
+
+
+## Cashfree Payouts (sandbox)
+
+`lib/psp/cashfree/` is a plain REST client for Payouts v2 (`https://payout-gamma.cashfree.com/payout` (the sandbox host that accepted our signed requests; `sandbox.cashfree.com/payout` kept answering 403), `x-api-version 2024-01-01`) plus a **payout-only** partner adapter: INR to a bank account (IMPS/NEFT/RTGS/`banktransfer`) or a UPI ID, `transfer_id` = our transfer id, status by `GET /transfers`, webhooks verified with the V2 signature (base64 HMAC-SHA256 of timestamp + raw body, key = client secret). The npm package `cashfree-payout` (0.0.14, 2024) is not used: it targets the old v1 token flow.
+
+**Access.** Cashfree answers every payout call with `403 authentication_error "IP not whitelisted"` unless the caller's IP is whitelisted or the request carries `x-cf-signature`. Our servers (Hostinger shared hosting, this build container) have changing outbound IPs, so use the signature: in the Cashfree dashboard open Developers > Payouts > Two-Factor Authentication, choose **Public Key**, download the PEM, and set it as `CASHFREE_PUBLIC_KEY` (or point `CASHFREE_PUBLIC_KEY_FILE` at the file for `scripts/cashfree-e2e.ts`). Then run `npx tsx scripts/cashfree-e2e.ts`.
+
+**Verified 2026-10-10 (sandbox):** signed requests accepted, IMPS payout accepted and reached PAID by polling, UPI payout accepted, malformed IFSC refused. Quirk: with the public key set, the sandbox gateway still answers `403 IP not whitelisted` on some requests at random (our outbound IP rotates); the client repeats those up to 8 times in sandbox only, which is safe because the call is refused before anything is processed.
+
+**Not a live routing leg yet.** Cashfree Payouts pays from the payout balance of the Cashfree account. If Vaulte topped that balance up, Vaulte would be advancing money, which the no-custody model does not allow. Before enabling it, get in writing from Cashfree: who funds the balance per transfer and from which licensed entity, whether stablecoin-origin funds are accepted, per-payment limits, UPI limits, the fee schedule, and whether their cross-border (PA-CB) product, which issues the inward-remittance records, is the right one for export receipts. Webhook URL to register: `/api/webhooks/partner/cashfree`.

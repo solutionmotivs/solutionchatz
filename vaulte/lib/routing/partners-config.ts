@@ -1,0 +1,73 @@
+// Live partner catalogue. Real corridors, fees and limits come from SIGNED PARTNER AGREEMENTS, so they are configuration,
+// not code: set PARTNER_CATALOG_JSON (or PARTNER_CATALOG_FILE) to an array of legs. Test mode uses the mock catalogue only.
+// Each leg's `partner` must have an adapter registered in lib/psp/stablecoin/registry.ts (today: "airwallex").
+import { readFileSync } from "fs";
+import { z } from "zod";
+import type { Leg } from "@/lib/stablecoin/types";
+import { assertPrincipalStructure, StructureSchema } from "./structure";
+
+const Chain = z.enum(["solana", "base", "ethereum", "tron", "polygon"]);
+const FeeTierSchema = z.object({ upToUsd: z.number().positive().nullable(), flatUsd: z.number().min(0).max(1000).optional(), bps: z.number().min(0).max(500).optional() })
+  .refine(t => t.flatUsd !== undefined || t.bps !== undefined, "a fee tier needs flatUsd or bps");
+export const FeeScheduleSchema = z.array(FeeTierSchema).min(1).max(10).superRefine((tiers, ctx) => {
+  let prev = 0;
+  tiers.forEach((t, i) => {
+    if (t.upToUsd === null) { if (i !== tiers.length - 1) ctx.addIssue({ code: "custom", message: "only the last fee tier may be open-ended (upToUsd: null)" }); return; }
+    if (t.upToUsd <= prev) ctx.addIssue({ code: "custom", message: "fee tiers must be in ascending order of upToUsd" });
+    prev = t.upToUsd;
+  });
+});
+const LegSchema = z.object({
+  id: z.string().min(3),
+  partner: z.string().min(2).refine(p => !p.startsWith("mock_"), "mock partners are not allowed in the live catalogue"),
+  kind: z.enum(["ACCEPT_TOKEN", "ONRAMP_FIAT", "OFFRAMP", "DIRECT", "INDIA_PAYOUT"]),
+  country: z.string().length(2), jurisdiction: z.string().min(2),
+  srcCurrency: z.string().length(3).optional(), destCurrency: z.string().length(3).optional(),
+  destCurrencies: z.array(z.string().length(3)).optional(), acceptsFiat: z.array(z.string().length(3)).optional(),
+  rails: z.array(z.string()).min(1), tokens: z.array(z.enum(["USDC", "USDT", "EURC"])), chains: z.array(Chain),
+  spreadBps: z.number().min(0).max(500), feeBps: z.number().min(0).max(500), fixedFeeUsd: z.number().min(0).max(1000),
+  etaSec: z.number().int().positive(), minUsd: z.number().positive(), maxUsd: z.number().positive(),
+  kinds: z.array(z.enum(["BUSINESS", "PERSONAL"])).min(1), indiaAuth: z.enum(["PA_CB_E", "PA_CB_I", "MTSS", "LRS_AD"]).optional(),
+  feeSchedule: FeeScheduleSchema.optional(),
+  structure: StructureSchema,
+});
+
+let cached: Leg[] | undefined;
+
+/**
+ * Structural rule: nothing on the Indian side may touch crypto. A leg in the Indian jurisdiction is fiat only (no tokens, no chains) and can only
+ * be an India payout or an India-origin fiat leg. This keeps every Indian party (and every Indian rupee payout) outside any virtual-digital-asset
+ * transfer: the stablecoin is received and converted by a licensed partner offshore, and India only ever sees a fiat remittance.
+ */
+export function assertIndiaFiatOnly(legs: Leg[]): void {
+  for (const l of legs) {
+    if (l.jurisdiction !== "IN" && l.country !== "IN") continue;
+    if (l.tokens.length || l.chains.length || ["ACCEPT_TOKEN", "ONRAMP_FIAT", "OFFRAMP"].includes(l.kind)) {
+      throw new Error(`leg ${l.id}: legs in India must be fiat only (no stablecoin tokens, chains, on-ramp or off-ramp)`);
+    }
+  }
+}
+
+export function parseCatalog(json: string): Leg[] {
+  const arr = z.array(LegSchema).parse(JSON.parse(json));
+  assertIndiaFiatOnly(arr as Leg[]);
+  assertPrincipalStructure(arr as Leg[]);
+  const ids = new Set<string>();
+  for (const l of arr) { if (ids.has(l.id)) throw new Error(`duplicate leg id ${l.id}`); ids.add(l.id); }
+  return arr as Leg[];
+}
+
+export function realLegs(): Leg[] {
+  if (cached) return cached;
+  const raw = process.env.PARTNER_CATALOG_JSON ?? (process.env.PARTNER_CATALOG_FILE ? readFileSync(process.env.PARTNER_CATALOG_FILE, "utf8") : "");
+  try {
+    cached = raw ? parseCatalog(raw) : [];
+  } catch (e) {
+    // A broken catalogue must never silently fall back to something else: no live routes until it is fixed.
+    console.error(JSON.stringify({ level: "error", msg: "PARTNER_CATALOG is invalid; no live routes", error: e instanceof Error ? e.message : String(e) }));
+    cached = [];
+  }
+  return cached;
+}
+
+export function resetCatalogCacheForTests() { cached = undefined; }
