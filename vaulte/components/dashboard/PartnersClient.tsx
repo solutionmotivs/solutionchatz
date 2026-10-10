@@ -4,6 +4,8 @@ import { api } from "@/lib/client-api";
 import { ErrorBox } from "@/components/auth/AuthShell";
 import { Chip, Section, Shell } from "@/components/verification/shared";
 
+interface Field { key: string; label: string; kind: "text" | "date" | "file" }
+interface Question { id: string; title: string; remarks?: string; url?: string; status: "OPEN" | "ANSWERED"; fields: Field[] }
 interface Row { id: string; partner: string; mode: "test" | "live"; status: string; note: string | null; action_url?: string | null; submitted_at: string | null; decided_at: string | null }
 
 const NEXT_STEP: Record<string, string> = {
@@ -13,6 +15,57 @@ const NEXT_STEP: Record<string, string> = {
   APPROVED: "Approved. Payments can use this partner.",
   REJECTED: "The partner declined. Contact support with the note below.",
 };
+
+const toBase64 = (f: File) => new Promise<string>((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1] ?? ""); r.onerror = () => rej(new Error("read failed")); r.readAsDataURL(f); });
+
+/** The partner's questions for one approval, answered here so nobody is contacted separately. */
+function Questions({ rowId, canWrite, onDone }: { rowId: string; canWrite: boolean; onDone: () => void }) {
+  const [qs, setQs] = useState<Question[] | null>(null); const [err, setErr] = useState(""); const [busy, setBusy] = useState("");
+  const [vals, setVals] = useState<Record<string, string>>({}); const [files, setFiles] = useState<Record<string, File>>({});
+  useEffect(() => { let live = true; api(`/api/partner-customers/${rowId}/requests`).then(r => { if (live) setQs(r.ok ? r.data.data : []); }); return () => { live = false; }; }, [rowId]);
+  const open = (qs ?? []).filter(q => q.status === "OPEN");
+  if (!qs || open.length === 0) return null;
+  async function send(q: Question) {
+    setErr(""); setBusy(q.id);
+    try {
+      const values: Record<string, string> = {}; const fl: Record<string, { name: string; mime: string; data_base64: string }> = {};
+      for (const f of q.fields) {
+        const k = `${q.id}:${f.key}`;
+        if (f.kind === "file") { const file = files[k]; if (file) fl[f.key] = { name: file.name, mime: file.type, data_base64: await toBase64(file) }; }
+        else if (vals[k]) values[f.key] = vals[k];
+      }
+      const r = await api(`/api/partner-customers/${rowId}/requests/${q.id}`, { body: { values, files: fl } });
+      if (!r.ok) setErr(r.error?.message ?? "Could not send your answer"); else onDone();
+    } catch { setErr("Could not read the file you chose"); }
+    setBusy("");
+  }
+  return (
+    <div className="mt-4 space-y-4">
+      {err && <ErrorBox message={err} />}
+      {open.map(q => (
+        <div key={q.id} className="border border-ink/10 p-4">
+          <strong className="text-[13px]">{q.title}</strong>
+          {q.remarks && <p className="text-[12px] text-slate mt-1 whitespace-pre-line">{q.remarks}</p>}
+          {q.url && /^https:\/\//.test(q.url) && <a className="btn-primary inline-block mt-3" href={q.url} target="_blank" rel="noopener noreferrer">Open the partner&apos;s step</a>}
+          {q.fields.length > 0 && canWrite && (
+            <div className="mt-3 grid gap-3 max-w-md">
+              {q.fields.map(f => (
+                <div key={f.key}><label className="label-text">{f.label}</label>
+                  {f.kind === "file"
+                    ? <input type="file" accept="application/pdf,image/png,image/jpeg" className="input-field" onChange={e => { const file = e.target.files?.[0]; setFiles(p => { const n = { ...p }; if (file) n[`${q.id}:${f.key}`] = file; else delete n[`${q.id}:${f.key}`]; return n; }); }} />
+                    : <input type={f.kind === "date" ? "date" : "text"} className="input-field" value={vals[`${q.id}:${f.key}`] ?? ""} onChange={e => setVals(p => ({ ...p, [`${q.id}:${f.key}`]: e.target.value }))} />}
+                </div>
+              ))}
+              <div><button className="btn-primary disabled:opacity-40" disabled={busy === q.id} onClick={() => send(q)}>{busy === q.id ? "Sending…" : "Send to the partner"}</button>
+                <p className="text-[10px] text-mist mt-2">Documents go straight to the partner and are not kept by Vaulte.</p></div>
+            </div>
+          )}
+          {q.fields.length > 0 && !canWrite && <p className="text-[11px] text-mist mt-2">An owner or admin of your account can answer this.</p>}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function PartnersClient({ role }: { role: string }) {
   const canWrite = ["OWNER", "ADMIN"].includes(role);
@@ -47,7 +100,8 @@ export default function PartnersClient({ role }: { role: string }) {
             {r.status === "NEEDS_INFO" && r.action_url && /^https:\/\//.test(r.action_url) && (
               <a className="btn-primary inline-block mt-3" href={r.action_url} target="_blank" rel="noopener noreferrer">Complete the partner&apos;s step</a>
             )}
-            {r.status === "NEEDS_INFO" && !r.action_url && <p className="text-[11px] text-[#9A4B12] mt-2">Check your verification page for missing details, then we resend them automatically.</p>}
+            {r.status === "NEEDS_INFO" && <Questions rowId={r.id} canWrite={canWrite} onDone={load} />}
+            {r.status === "NEEDS_INFO" && !r.action_url && <p className="text-[11px] text-[#9A4B12] mt-2">If nothing is listed above, check your verification page for missing details; we resend them automatically.</p>}
           </div>
         ))}
       </Section>

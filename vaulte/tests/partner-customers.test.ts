@@ -21,7 +21,7 @@ vi.mock("../lib/psp/stablecoin/registry", () => ({
   getPartner: (id: string) => id === "manual_partner" ? { id } : { id, submitCustomer: submit },
 }));
 
-import { onboardingFor, requireApprovedPartners, submitToPartner } from "../lib/partners/customers";
+import { onboardingFor, requireApprovedPartners, returnBankFrom, submitToPartner } from "../lib/partners/customers";
 import type { Route } from "../lib/stablecoin/types";
 
 const route = (...partners: string[]) => ({ legs: partners.map(p => ({ partner: p })) }) as unknown as Route;
@@ -67,5 +67,32 @@ describe("delegated partner onboarding", () => {
     rows.push({ id: "pcX", organizationId: "org1", partner: "wise", sandbox: false, status: "APPROVED", partnerRef: "w1", note: null });
     expect((await submitToPartner("org1", "wise", false)).status).toBe("APPROVED");
     expect(submit).not.toHaveBeenCalled();
+  });
+  it("a partner's own sandbox decides like the live one: it blocks until approved, and the customer is not created twice while the partner waits for them", async () => {
+    submit.mockResolvedValue({ partnerRef: "n-1", status: "NEEDS_INFO", note: "Complete the identity check" });
+    await expect(requireApprovedPartners("org1", route("nium"), true)).rejects.toMatchObject({ code: "PARTNER_ONBOARDING_PENDING" });
+    await expect(requireApprovedPartners("org1", route("nium"), true)).rejects.toMatchObject({ code: "PARTNER_ONBOARDING_PENDING" });
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(rows[0]).toMatchObject({ partner: "nium", sandbox: true, status: "NEEDS_INFO", partnerRef: "n-1" });
+  });
+  it("a submission the partner never accepted (no reference) is tried again", async () => {
+    submit.mockResolvedValueOnce({ partnerRef: "", status: "NEEDS_INFO", note: "Nium needs: incorporation date" });
+    submit.mockResolvedValueOnce({ partnerRef: "n-2", status: "SUBMITTED" });
+    await expect(requireApprovedPartners("org1", route("nium"), true)).rejects.toBeDefined();
+    await expect(requireApprovedPartners("org1", route("nium"), true)).rejects.toBeDefined();
+    expect(submit).toHaveBeenCalledTimes(2);
+    expect(rows[0]).toMatchObject({ partnerRef: "n-2", status: "SUBMITTED" });
+  });
+});
+
+describe("the account partners return funds to", () => {
+  it("is read from the KYB bank account in the country's own format", () => {
+    expect(returnBankFrom("IN", "hdfc0001234|12345678901234", "Sharma Exports")).toEqual({ accountName: "Sharma Exports", accountNumber: "12345678901234", bankCountry: "IN", currency: "INR", routingType: "IFSC", routingValue: "HDFC0001234", bankName: "HDFC Bank" });
+    expect(returnBankFrom("US", "021000021|123456789", "Acme")).toMatchObject({ bankCountry: "US", currency: "USD", routingType: "ACH CODE", routingValue: "021000021" });
+    expect(returnBankFrom("AU", "062-000|12345678", "Acme")).toMatchObject({ currency: "AUD", routingType: "BSB", routingValue: "062000" });
+    expect(returnBankFrom("DE", "DE89 3704 0044 0532 0130 00", "Acme")).toMatchObject({ accountNumber: "DE89370400440532013000", currency: "EUR", routingType: "" });
+    expect(returnBankFrom("GB", "GB29NWBK60161331926819", "Acme")).toMatchObject({ currency: "GBP" });
+    expect(returnBankFrom("MY", "MBBEMYKL|1234567890", "Acme")).toMatchObject({ routingType: "SWIFT", routingValue: "MBBEMYKL" });
+    expect(returnBankFrom("IN", "garbage", "Acme")).toBeUndefined();
   });
 });

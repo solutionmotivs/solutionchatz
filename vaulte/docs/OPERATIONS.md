@@ -39,6 +39,8 @@ Nine recurring jobs keep the product current without anyone clicking. Run them *
 | `webhooks` | 1 min | delivers due customer webhooks (retries, dead-letter) |
 | `erp-sync` | 15 min | pushes completed transfers to connected accounting systems |
 | `slow-transfers` | 10 min | flags transfers in flight past twice their quoted time and emails `OPS_EMAIL` |
+| `partner-onboarding` | 10 min | asks partners for the decision on customers waiting for them (SUBMITTED or NEEDS_INFO), in case a webhook was missed |
+| `partner-reconcile` | 2 min | asks partners (Nium) directly about transfers waiting for money and payouts in flight, in case a webhook was missed (Nium delivers webhooks at most once by default) |
 | `escrow-deadlines` | 1 h | deemed approvals after the agreed window |
 | `certificate-poll` | 1 h (each transfer re-checked every `CERT_POLL_INTERVAL_MIN`, default 6 h) | asks payout partners for eFIRA/eBRC still missing |
 | `sanctions-ofac`, `sanctions-un`, `sanctions-uk` | 24 h | refresh the lists (skip when unchanged; one list per run keeps memory low) |

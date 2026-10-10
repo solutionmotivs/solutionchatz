@@ -92,7 +92,9 @@ export async function buildLiveLegs(a: LiveArgs): Promise<LiveLegs> {
     out.legs.push({
       id: `${q.provider}.direct.${a.sourceCurrency}${a.destCurrency}`, partner: q.provider, kind: "DIRECT", country: q.country, jurisdiction: q.jurisdiction,
       srcCurrency: a.sourceCurrency, destCurrency: a.destCurrency, rails: [q.rail], tokens: [], chains: [],
-      spreadBps, feeBps: q.feeBps, fixedFeeUsd: q.fixedFeeUsd, etaSec: q.etaSec, minUsd: q.minUsd, maxUsd: q.maxUsd, kinds: ["BUSINESS", "PERSONAL"],
+      spreadBps, feeBps: q.feeBps, fixedFeeUsd: q.fixedFeeUsd, etaSec: q.etaSec, minUsd: q.minUsd, maxUsd: q.maxUsd,
+      // INDIA_FX_PROVIDERS is the operator's written confirmation that the provider's Indian entity is the RBI-authorised payment aggregator (cross-border) for business receipts into India; personal remittances stay with MTSS partners.
+      ...(a.destCountry === "IN" ? { kinds: ["BUSINESS" as const], indiaAuth: "PA_CB_E" as const } : { kinds: ["BUSINESS" as const, "PERSONAL" as const] }),
       ...(structure ? { structure } : {}),
       live: { provider: q.provider, quoteId: q.quoteId, rate: q.rate, midRate: a.midDestPerSource, validUntil: q.validUntil.toISOString() },
     });

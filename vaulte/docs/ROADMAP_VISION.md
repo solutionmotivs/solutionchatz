@@ -22,7 +22,7 @@ Dates are working estimates for one engineer, not promises. "Unverified" means b
 ## 2. What is not built yet (the real remaining work), in build order
 | # | Work | Why it matters | Needs from you | Effort |
 |---|---|---|---|---|
-| 1 | **Nium: finish** (adapter is built): ask Nium how sandbox credits settle, no-prefund model, webhook key, UPI, document upload; confirm in writing that its Indian entity is the authorised party before `INDIA_FX_PROVIDERS` is used live | the India and UAE leg | Nium account manager | 1 to 2 days after their answers |
+| 1 | **Nium: sandbox verified end to end (2026-10-10)**; production access and the questions in `docs/NIUM_PRODUCTION_ACCESS.md` remain: regions (SG/UK/EU), Files API, residents' KYC, webhook key, UPI, pricing; confirm in writing that its Indian entity is the authorised party before `INDIA_FX_PROVIDERS` is used live | the India and UAE leg | Nium account manager | 1 to 2 days after their answers |
 | 2 | **Partner KYC by webhook** (section 5): customer.approved / needs_info / rejected events into `PartnerCustomer`, requests shown inside Vaulte | the "never contact the customer separately" rule | none (code) | 2 days |
 | 3 | **Cashfree** (Payouts + Cross-border/Global Collections) and **Razorpay** (cross-border PA-CB) adapters | the INR landing leg with UPI/IMPS and eFIRA, as the second and third India option | sandbox keys for each; business account in your name | 4 days each |
 | 4 | **Stablecoin leg done properly**: Circle Mint (or Bridge) for USDC/EURC deposit addresses held by the licensed partner, off-ramp to USD/EUR, webhooks | the "USDC to USD/EUR to INR without SWIFT" flow | a **Circle Mint** sandbox key (apply at circle.com/mint) or a Bridge sandbox key | 3 days |

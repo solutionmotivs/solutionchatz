@@ -700,6 +700,8 @@ async function routeEvent(partnerId: string, ev: PartnerEventInput): Promise<boo
       await onFundsConfirmed(t.id, {});
       return true;
     }
+    case "customer.funds_received": return onCustomerFundsReceived(partnerId, d);
+    case "funds.unmatched": log("warn", "partner reported funds it could not match to a customer", { partner: partnerId, reference: d.reference, currency: d.currency, amount: d.amount }); return false;
     case "customer.status": return applyCustomerStatusEvent(partnerId, { customer_ref: String(d.customer_ref), state: String(d.state), note: d.note ? String(d.note) : undefined, action_url: d.action_url ? String(d.action_url) : undefined });
     case "payout.completed": {
       const t = await findTransferForEvent(d);
@@ -728,6 +730,30 @@ async function routeEvent(partnerId: string, ev: PartnerEventInput): Promise<boo
     default:
       return false;
   }
+}
+
+/**
+ * A credit reached the customer's own account at the partner (its virtual account). The partner does not know our transfer id, so the credit is
+ * matched to the organisation's waiting transfer on that partner: same currency, the exact amount first, then the oldest one it covers. Several
+ * credits are never applied to one transfer because the credit id is the event id.
+ */
+async function onCustomerFundsReceived(partnerId: string, d: Record<string, any>): Promise<boolean> {
+  const customerHash = String(d.customer_ref ?? "").split(":")[0];
+  if (!customerHash) return false;
+  const customers = await db.partnerCustomer.findMany({ where: { partner: partnerId, partnerRef: { startsWith: customerHash } }, select: { organizationId: true, sandbox: true } });
+  if (!customers.length) return false;
+  const currency = String(d.currency ?? "").toUpperCase();
+  const amount = BigInt(String(d.amount_minor ?? "0"));
+  const waiting = (await db.transfer.findMany({
+    where: { organizationId: { in: customers.map(c => c.organizationId) }, status: "AWAITING_FUNDS", fundingMethod: "FIAT_LOCAL", sourceCurrency: currency },
+    orderBy: { createdAt: "asc" },
+  })).filter(t => (t.route as unknown as Route).legs[0]?.partner === partnerId);
+  if (!waiting.length) return false;
+  const t = waiting.find(x => x.sourceAmount === amount) ?? waiting.find(x => x.sourceAmount <= amount) ?? (waiting.length === 1 ? waiting[0] : null);
+  if (!t) return false;
+  if (amount < t.sourceAmount) { await quarantine(t.id, "UNDERPAID: received less than the quoted amount; partner will refund or top up", true); return true; }
+  await onFundsConfirmed(t.id, {});
+  return true;
 }
 
 async function onVirtualAccountCredit(partnerId: string, d: Record<string, any>): Promise<boolean> {
